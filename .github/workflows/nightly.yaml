@@ -1,0 +1,64 @@
+name: Nightly
+
+# Builds Wings (the Stratosphere fork) for Linux and publishes it as the "nightly" release: the tag moves to the commit that was built and
+# the binaries of the release are replaced. Runs on every push to develop, every night, and by hand.
+on:
+  push:
+    branches:
+      - develop
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+# One at a time: a newer run replaces an older one that is still going.
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  CGO_ENABLED: "0"
+  SRC_PATH: github.com/pterodactyl/wings
+
+jobs:
+  nightly:
+    name: Test, build and publish
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Code checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test $(go list ./...)
+
+      - name: Build
+        run: |
+          VERSION="nightly-$(date -u +%Y%m%d)-${GITHUB_SHA:0:7}"
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH="$arch" go build -trimpath \
+              -ldflags="-s -w -X ${SRC_PATH}/system.Version=${VERSION}" \
+              -o "dist/wings_linux_${arch}" .
+          done
+          chmod 755 dist/*
+          (cd dist && sha256sum wings_linux_* > checksums.txt)
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Publish the nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Deleting the release with its tag, then making it again, moves the tag to this commit.
+          gh release delete nightly --yes --cleanup-tag || true
+          gh release create nightly dist/* \
+            --target "${GITHUB_SHA}" \
+            --prerelease \
+            --title "Nightly (${VERSION})" \
+            --notes "Built from ${GITHUB_SHA} on $(date -u +'%Y-%m-%d %H:%M UTC'). The binaries are for Linux, amd64 and arm64. See FORK.md for what is different from Wings."
