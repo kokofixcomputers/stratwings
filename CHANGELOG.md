@@ -3,6 +3,8 @@
 ## Stratosphere fork
 
 ### Added
+* Self update: `GET`/`POST /api/system/update` downloads the nightly release, checks its checksum, runs it once, swaps it in and restarts. A new binary that fails to stay up three times is replaced by the old one.
+* `wings install <panel-url> <token> [node-id]` configures the node, writes the systemd service and starts it.
 * The panel can push the https certificate of a node (`GET`/`POST /api/certificates`), it is used without a restart, see `FORK.md`.
 * A node that is not set to use https answers https as well on the same port once it has a certificate.
 * A node set to use https without certificate files starts with a temporary certificate instead of stopping.

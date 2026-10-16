@@ -108,6 +108,8 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 	protected.GET("/api/certificates", certificates)
 	protected.POST("/api/certificates", certificates)
 	protected.GET("/api/system", getSystemInformation)
+	protected.GET("/api/system/update", getSelfUpdate)
+	protected.POST("/api/system/update", postSelfUpdate)
 	protected.GET("/api/servers", getAllServers)
 	protected.POST("/api/servers", postCreateServer)
 	protected.DELETE("/api/transfers/:server", deleteTransfer)

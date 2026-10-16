@@ -26,6 +26,14 @@ Everything else is unchanged, including `--auto-tls` (Let's Encrypt by Wings its
 
 The panel renews by itself after that: a replaced certificate is given to every node that uses it within the hour.
 
+## Updates and installing
+
+* `POST /api/system/update` (the panel's **Update** buttons): downloads `wings_linux_<arch>` and `checksums.txt` of the release in
+  `WINGS_UPDATE_URL` (default: the nightly release), checks the hash, runs `version` of the new binary, keeps the old one as `wings.old`
+  and restarts in place. `wings.updating` marks a binary on trial: three starts without staying up a minute put `wings.old` back.
+* `wings install <panel-url> <token> [node-id]` (root): fetches the configuration, writes `/etc/systemd/system/wings.service` if there is
+  none, and runs `systemctl enable --now wings`.
+
 ## Build
 
 `go build` needs Linux system calls, so build for Linux: `GOOS=linux GOARCH=amd64 go build -o wings .`. The tests of the new package run

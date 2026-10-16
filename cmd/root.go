@@ -91,11 +91,13 @@ func init() {
 
 	rootCommand.AddCommand(versionCommand)
 	rootCommand.AddCommand(configureCmd)
+	rootCommand.AddCommand(installCommand)
 	rootCommand.AddCommand(newDiagnosticsCommand())
 }
 
 func rootCmdRun(cmd *cobra.Command, _ []string) {
 	printLogo()
+	bootCheckUpdate()
 	log.Debug("running in debug mode")
 	log.WithField("config_file", configPath).Info("loading configuration from file")
 

@@ -49,6 +49,8 @@ jobs:
           done
           chmod 755 dist/*
           (cd dist && sha256sum wings_linux_* > checksums.txt)
+          # The panel and the nodes read the version of the release from here without using the GitHub API.
+          echo "${VERSION}" > dist/version.txt
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Publish the nightly release
