@@ -34,6 +34,20 @@ The panel renews by itself after that: a replaced certificate is given to every 
 * `wings install <panel-url> <token> [node-id]` (root): fetches the configuration, writes `/etc/systemd/system/wings.service` if there is
   none, and runs `systemctl enable --now wings`.
 
+## Server importer
+
+`POST /api/servers/<uuid>/files/import/test` and `POST /api/servers/<uuid>/files/import` (the panel's Importer page): connect to an SFTP or FTP(S)
+server and copy a folder of it into the server. The node reads from the remote server itself, nothing goes through the panel.
+
+* `test` connects, lists the first 100 entries of the folder and returns the SSH host key fingerprint, which the panel shows and sends back
+  with `import` so a different server is refused.
+* `import` streams one JSON line per step: `connected`, `listing` (files, folders, bytes), one `file` per copied file
+  (`done`, `total`, `path`, `ok`, `error`, `bytes`), then `finished` or `error`. SFTP copies four files at a time, FTP one.
+* Links and special files on the remote server are skipped, names with `/`, `\`, `..` or NUL are skipped. Files are written through the
+  server's file system: its disk limit counts and its denylist applies. A full disk stops the import.
+* Addresses on the node's networks (the same rule as remote downloads) are refused unless they are in `remote_download_allowlist`;
+  `disable_remote_download` turns the importer off. Cancelling the request cancels the import.
+
 ## Build
 
 `go build` needs Linux system calls, so build for Linux: `GOOS=linux GOARCH=amd64 go build -o wings .`. The tests of the new package run

@@ -152,6 +152,10 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 			files.GET("/pull", middleware.RemoteDownloadEnabled(), getServerPullingFiles)
 			files.POST("/pull", middleware.RemoteDownloadEnabled(), postServerPullRemoteFile)
 			files.DELETE("/pull/:download", middleware.RemoteDownloadEnabled(), deleteServerPullRemoteFile)
+
+			// Copy everything from an SFTP or FTP server into this one.
+			files.POST("/import/test", middleware.RemoteDownloadEnabled(), postServerImportTest)
+			files.POST("/import", middleware.RemoteDownloadEnabled(), postServerImport)
 		}
 
 		backup := server.Group("/backup")
