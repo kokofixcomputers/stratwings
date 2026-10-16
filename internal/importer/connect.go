@@ -152,11 +152,33 @@ func connectSFTP(ctx context.Context, cfg Config) (Source, error) {
 	_ = raw.SetDeadline(time.Time{})
 	conn := ssh.NewClient(sc, chans, reqs)
 
-	client, err := sftp.NewClient(conn)
-	if err != nil {
+	// Starting the SFTP subsystem waits for the other server, which can say nothing for ever.
+	type started struct {
+		client *sftp.Client
+		err    error
+	}
+	startedCh := make(chan started, 1)
+	go func() {
+		c, err := sftp.NewClient(conn)
+		startedCh <- started{c, err}
+	}()
+	var client *sftp.Client
+	select {
+	case st := <-startedCh:
+		if st.err != nil {
+			_ = conn.Close()
+
+			return nil, fmt.Errorf("the server does not offer SFTP: %w", st.err)
+		}
+		client = st.client
+	case <-time.After(dialTimeout):
 		_ = conn.Close()
 
-		return nil, fmt.Errorf("the server does not offer SFTP: %w", err)
+		return nil, errors.New("the server did not start SFTP, check that SFTP is turned on for this login")
+	case <-ctx.Done():
+		_ = conn.Close()
+
+		return nil, ctx.Err()
 	}
 
 	return &sftpSource{conn: conn, client: client, fingerprint: seen}, nil

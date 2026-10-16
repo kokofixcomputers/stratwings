@@ -153,9 +153,20 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 			files.POST("/pull", middleware.RemoteDownloadEnabled(), postServerPullRemoteFile)
 			files.DELETE("/pull/:download", middleware.RemoteDownloadEnabled(), deleteServerPullRemoteFile)
 
-			// Copy everything from an SFTP or FTP server into this one.
+			// Look at an SFTP or FTP server before importing from it.
 			files.POST("/import/test", middleware.RemoteDownloadEnabled(), postServerImportTest)
-			files.POST("/import", middleware.RemoteDownloadEnabled(), postServerImport)
+		}
+
+		// Work that takes a while runs in the background: it goes on when nobody watches and its progress and result are kept.
+		jobs := server.Group("/jobs")
+		{
+			jobs.GET("", getServerJobs)
+			jobs.GET("/:job", getServerJob)
+			jobs.DELETE("/:job", deleteServerJob)
+			jobs.POST("/import", middleware.RemoteDownloadEnabled(), postServerJobImport)
+			jobs.POST("/compress", postServerJobCompress)
+			jobs.POST("/decompress", postServerJobDecompress)
+			jobs.POST("/pull", middleware.RemoteDownloadEnabled(), postServerJobPull)
 		}
 
 		backup := server.Group("/backup")

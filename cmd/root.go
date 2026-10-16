@@ -33,6 +33,7 @@ import (
 	"github.com/pterodactyl/wings/internal/certstore"
 	"github.com/pterodactyl/wings/internal/cron"
 	"github.com/pterodactyl/wings/internal/database"
+	"github.com/pterodactyl/wings/internal/jobs"
 	"github.com/pterodactyl/wings/internal/network"
 	"github.com/pterodactyl/wings/loggers/cli"
 	"github.com/pterodactyl/wings/remote"
@@ -339,6 +340,13 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		log.Info("using the certificate that the Panel pushed earlier")
 	}
 
+	// Work that takes a while (imports, archives, downloads) runs as jobs that are kept in the root directory of this node.
+	if jm, err := jobs.NewManager(path.Join(config.Get().System.RootDirectory, ".jobs")); err != nil {
+		log.WithField("error", err).Error("background jobs are not available")
+	} else {
+		jobs.SetShared(jm)
+	}
+
 	api := config.Get().Api
 	log.WithFields(log.Fields{
 		"use_ssl":      api.Ssl.Enabled,
@@ -454,6 +462,7 @@ func shutdownOnSignal(signals <-chan os.Signal, manager *server.Manager, srv *ht
 	if err := manager.PersistStates(); err != nil {
 		log.WithField("error", err).Warn("failed to persist server states to disk")
 	}
+	jobs.ShutdownShared(5 * time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {

@@ -34,19 +34,36 @@ The panel renews by itself after that: a replaced certificate is given to every 
 * `wings install <panel-url> <token> [node-id]` (root): fetches the configuration, writes `/etc/systemd/system/wings.service` if there is
   none, and runs `systemctl enable --now wings`.
 
-## Server importer
+## Jobs (imports, archives, downloads)
 
-`POST /api/servers/<uuid>/files/import/test` and `POST /api/servers/<uuid>/files/import` (the panel's Importer page): connect to an SFTP or FTP(S)
-server and copy a folder of it into the server. The node reads from the remote server itself, nothing goes through the panel.
+Work that takes a while runs as a **job** on the node, so it goes on when the page of the Panel is closed or reloaded, and its progress and result
+are still there afterwards. `GET /api/servers/<uuid>/jobs` lists the jobs of a server (newest first), `GET .../jobs/<id>` shows one,
+`DELETE .../jobs/<id>` cancels a job that is going and forgets one that is over. Jobs are kept in `<root_directory>/.jobs`; a job that was
+going when Wings stopped shows as `interrupted`; the last 20 jobs of a server are kept for 14 days; a quick download that went well is
+forgotten after 10 minutes. A job has `status` (scanning, running, finished, failed, cancelled, interrupted), `files`, `done`, `failed`,
+`skipped`, `bytes`, `bytes_total`, `current`, the first 200 `failures` (path and reason), `warnings`, `error` and a `result`.
 
-* `test` connects, lists the first 100 entries of the folder and returns the SSH host key fingerprint, which the panel shows and sends back
-  with `import` so a different server is refused.
-* `import` streams one JSON line per step: `connected`, `listing` (files, folders, bytes), one `file` per copied file
-  (`done`, `total`, `path`, `ok`, `error`, `bytes`), then `finished` or `error`. SFTP copies four files at a time, FTP one.
+Start one with `POST .../jobs/<type>`:
+
+* `compress` `{root, files}`: makes the `.tar.gz` (the name is in `result.name`). `decompress` `{root, file}`: extracts an archive. One of
+  the two at a time per server. Progress is the bytes of the files archived / of the archive read.
+* `pull` `{files: [{url, directory, filename}]}`: downloads a list of files, three at a time for the whole server (the limit of a node), a failed
+  file is tried again twice, files that still fail are listed and do not hold up the others. Same rules as remote downloads.
+* `import` (below). One at a time per server.
+
+### Server importer
+
+`POST /api/servers/<uuid>/files/import/test` (the panel's Importer page) connects to an SFTP or FTP(S) server, lists the first 100 entries of the
+folder and returns the SSH host key fingerprint, which the panel shows and sends back with `jobs/import`, so a different server is refused.
+`POST .../jobs/import` then copies a folder of it into the server as a job. The node reads from the remote server itself, nothing goes through
+the panel.
+
+* Folders are listed several at a time, then the files are copied (SFTP four at a time, FTP one). The job shows the number of files found while
+  looking, then `done`/`files` and the bytes, also inside one big file.
 * Links and special files on the remote server are skipped, names with `/`, `\`, `..` or NUL are skipped. Files are written through the
   server's file system: its disk limit counts and its denylist applies. A full disk stops the import.
 * Addresses on the node's networks (the same rule as remote downloads) are refused unless they are in `remote_download_allowlist`;
-  `disable_remote_download` turns the importer off. Cancelling the request cancels the import.
+  `disable_remote_download` turns imports and downloads off. The login is only in memory while the job connects and is never saved.
 
 ## Build
 

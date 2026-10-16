@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // Entry is something in a remote directory. Links and special files are never listed.
@@ -65,6 +68,10 @@ type Summary struct {
 
 const maxDepth = 64
 
+// heartbeat is how often the progress is reported while files are being copied, also inside one big file. A proxy in front of the panel
+// closes an answer that stays silent for a minute.
+var heartbeat = 5 * time.Second
+
 // ValidName tells whether a name from a remote listing is safe to use as a name in the server: a remote server must not be able to
 // write outside of the folder by naming a file "..", "a/b" or with a NUL.
 func ValidName(name string) bool {
@@ -99,56 +106,106 @@ func Run(ctx context.Context, src Source, w Writer, opts Options, emit func(map[
 	remote := path.Clean("/" + strings.TrimLeft(opts.Remote, "/"))
 	dest := path.Clean("/" + strings.TrimLeft(opts.Dest, "/"))
 
-	// 1. what there is
-	var items []item
-	var bytes int64
-	skipped := 0
+	// 1. what there is. Folders are listed by several workers at once: over SFTP every listing is a round trip to the other server,
+	// and a world has thousands of folders. Progress is reported about once a second.
+	var (
+		items      []item
+		bytes      int64
+		skipped    int
+		folders    int
+		scanErr    error
+		lastReport time.Time
+		scanMu     sync.Mutex
+	)
+	cond := sync.NewCond(&scanMu)
 	type pending struct {
 		rel   string
 		depth int
 	}
 	queue := []pending{{"", 0}}
-	for len(queue) > 0 {
-		if err := ctx.Err(); err != nil {
-			return sum, err
+	active := 0
+	report := func(current string) { // scanMu is held
+		if time.Since(lastReport) < time.Second {
+			return
 		}
-		cur := queue[0]
-		queue = queue[1:]
-
-		entries, err := src.List(ctx, path.Join(remote, cur.rel))
-		if err != nil {
-			if cur.rel == "" {
-				return sum, fmt.Errorf("could not read %s: %w", remote, err)
-			}
-			skipped++
-			send(map[string]any{"event": "warning", "path": cur.rel, "error": "could not read this folder: " + err.Error()})
-			continue
-		}
-		for _, e := range entries {
-			if !ValidName(e.Name) {
-				skipped++
-				continue
-			}
-			rel := path.Join(cur.rel, e.Name)
-			if e.Dir {
-				if cur.depth+1 > maxDepth {
-					skipped++
-					continue
-				}
-				items = append(items, item{rel: rel, dir: true})
-				queue = append(queue, pending{rel, cur.depth + 1})
-			} else {
-				items = append(items, item{rel: rel, size: e.Size})
-				bytes += e.Size
-			}
-			if len(items) > limit {
-				return sum, fmt.Errorf("there are more than %d files and folders, import a smaller folder", limit)
-			}
-		}
-		if len(items)%500 < len(entries) {
-			send(map[string]any{"event": "scanning", "entries": len(items)})
-		}
+		lastReport = time.Now()
+		send(map[string]any{"event": "scanning", "entries": len(items), "folders": folders, "path": current})
 	}
+
+	scanners := src.Concurrency() * 2
+	if scanners < 1 {
+		scanners = 1
+	}
+	var scan sync.WaitGroup
+	for i := 0; i < scanners; i++ {
+		scan.Add(1)
+		go func() {
+			defer scan.Done()
+			for {
+				scanMu.Lock()
+				for len(queue) == 0 && active > 0 && scanErr == nil && ctx.Err() == nil {
+					cond.Wait()
+				}
+				if scanErr != nil || ctx.Err() != nil || len(queue) == 0 {
+					cond.Broadcast()
+					scanMu.Unlock()
+					return
+				}
+				cur := queue[0]
+				queue = queue[1:]
+				active++
+				scanMu.Unlock()
+
+				entries, err := src.List(ctx, path.Join(remote, cur.rel))
+
+				scanMu.Lock()
+				active--
+				if err != nil {
+					if cur.rel == "" {
+						scanErr = fmt.Errorf("could not read %s: %w", remote, err)
+					} else {
+						skipped++
+						send(map[string]any{"event": "warning", "path": cur.rel, "error": "could not read this folder: " + err.Error()})
+					}
+				} else {
+					folders++
+					for _, e := range entries {
+						if !ValidName(e.Name) {
+							skipped++
+							continue
+						}
+						rel := path.Join(cur.rel, e.Name)
+						if e.Dir {
+							if cur.depth+1 > maxDepth {
+								skipped++
+								continue
+							}
+							items = append(items, item{rel: rel, dir: true})
+							queue = append(queue, pending{rel, cur.depth + 1})
+						} else {
+							items = append(items, item{rel: rel, size: e.Size})
+							bytes += e.Size
+						}
+					}
+					if len(items) > limit && scanErr == nil {
+						scanErr = fmt.Errorf("there are more than %d files and folders, import a smaller folder", limit)
+					}
+					report(cur.rel)
+				}
+				cond.Broadcast()
+				scanMu.Unlock()
+			}
+		}()
+	}
+	scan.Wait()
+	if scanErr != nil {
+		return sum, scanErr
+	}
+	if err := ctx.Err(); err != nil {
+		return sum, err
+	}
+	// The workers finish in any order, a fixed order makes the progress and the failures easy to follow.
+	sort.Slice(items, func(i, j int) bool { return items[i].rel < items[j].rel })
 
 	dirs := 0
 	for _, it := range items {
@@ -184,6 +241,23 @@ func Run(ctx context.Context, src Source, w Writer, opts Options, emit func(map[
 	if workers < 1 {
 		workers = 1
 	}
+	var read atomic.Int64
+	stopBeat := make(chan struct{})
+	interval := heartbeat
+	go func() {
+		tick := time.NewTicker(interval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-tick.C:
+				send(map[string]any{"event": "progress", "bytesRead": read.Load(), "bytesTotal": bytes})
+			case <-stopBeat:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	var mu sync.Mutex
 	next := 0
 	diskFull := false
@@ -204,7 +278,7 @@ func Run(ctx context.Context, src Source, w Writer, opts Options, emit func(map[
 
 				it := files[index]
 				target := path.Join(dest, it.rel)
-				ok, skip, n, err := copyOne(ctx, src, w, path.Join(remote, it.rel), target, opts.Overwrite)
+				ok, skip, n, err := copyOne(ctx, src, w, path.Join(remote, it.rel), target, opts.Overwrite, &read)
 
 				mu.Lock()
 				sum.Done++
@@ -236,6 +310,7 @@ func Run(ctx context.Context, src Source, w Writer, opts Options, emit func(map[
 		}()
 	}
 	wg.Wait()
+	close(stopBeat)
 
 	if err := ctx.Err(); err != nil {
 		return sum, err
@@ -256,7 +331,7 @@ func describe(err error, w Writer) string {
 }
 
 // copyOne copies one file. ok is false only for a failure; skip is for a file that was left alone on purpose.
-func copyOne(ctx context.Context, src Source, w Writer, from, to string, overwrite bool) (ok, skip bool, n int64, err error) {
+func copyOne(ctx context.Context, src Source, w Writer, from, to string, overwrite bool, read *atomic.Int64) (ok, skip bool, n int64, err error) {
 	if w.Denied(to) {
 		return false, false, 0, fmt.Errorf("this file is not allowed on this server")
 	}
@@ -270,7 +345,7 @@ func copyOne(ctx context.Context, src Source, w Writer, from, to string, overwri
 	}
 	defer r.Close()
 
-	n, err = w.WriteFrom(to, &ctxReader{ctx: ctx, r: r})
+	n, err = w.WriteFrom(to, &ctxReader{ctx: ctx, r: r, count: read})
 	if err != nil {
 		return false, false, n, err
 	}
@@ -280,8 +355,9 @@ func copyOne(ctx context.Context, src Source, w Writer, from, to string, overwri
 
 // ctxReader stops a read as soon as the context has ended.
 type ctxReader struct {
-	ctx context.Context
-	r   io.Reader
+	ctx   context.Context
+	r     io.Reader
+	count *atomic.Int64
 }
 
 func (c *ctxReader) Read(p []byte) (int, error) {
@@ -289,5 +365,10 @@ func (c *ctxReader) Read(p []byte) (int, error) {
 		return 0, err
 	}
 
-	return c.r.Read(p)
+	n, err := c.r.Read(p)
+	if c.count != nil {
+		c.count.Add(int64(n))
+	}
+
+	return n, err
 }

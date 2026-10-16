@@ -16,6 +16,7 @@ import (
 	"github.com/klauspost/compress/zip"
 	"github.com/mholt/archives"
 
+	"github.com/pterodactyl/wings/internal/progress"
 	"github.com/pterodactyl/wings/internal/ufs"
 )
 
@@ -29,7 +30,50 @@ import (
 // and the compressed file will be placed at that location named
 // `archive-{date}.tar.gz`.
 func (fs *Filesystem) CompressFiles(dir string, paths []string) (ufs.FileInfo, error) {
-	a := &Archive{Filesystem: fs, BaseDirectory: dir, Files: paths}
+	return fs.CompressFilesWith(context.Background(), dir, paths, nil)
+}
+
+// SizeOf counts the files and the bytes of what an archive of these paths would hold (folders are looked into).
+func (fs *Filesystem) SizeOf(ctx context.Context, dir string, paths []string) (files int, size int64, err error) {
+	var walk func(p string) error
+	walk = func(p string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		st, err := fs.unixFS.Lstat(p)
+		if err != nil {
+			return err
+		}
+		switch {
+		case st.IsDir():
+			entries, err := fs.ReadDirStat(p)
+			if err != nil {
+				return err
+			}
+			for _, e := range entries {
+				if err := walk(path.Join(p, e.Name())); err != nil {
+					return err
+				}
+			}
+		case st.Mode().IsRegular():
+			files++
+			size += st.Size()
+		}
+
+		return nil
+	}
+	for _, p := range paths {
+		if err := walk(path.Join(dir, p)); err != nil {
+			return files, size, err
+		}
+	}
+
+	return files, size, nil
+}
+
+// CompressFilesWith is CompressFiles that stops when ctx ends and counts the bytes it puts in the archive in p (when given).
+func (fs *Filesystem) CompressFilesWith(ctx context.Context, dir string, paths []string, p *progress.Progress) (ufs.FileInfo, error) {
+	a := &Archive{Filesystem: fs, BaseDirectory: dir, Files: paths, Progress: p}
 	name := fmt.Sprintf("archive-%s", strings.ReplaceAll(time.Now().Format(time.RFC3339), ":", ""))
 
 	// Never write into an existing file, such as an archive created by another
@@ -57,7 +101,7 @@ func (fs *Filesystem) CompressFiles(dir string, paths []string) (ufs.FileInfo, e
 	// that archives being created at the same time cannot each use all the space
 	// that is left.
 	qf := newQuotaFile(fs, f, 0)
-	if err := a.Stream(context.Background(), qf); err != nil {
+	if err := a.Stream(ctx, qf); err != nil {
 		_ = qf.Close()
 		_ = fs.unixFS.Remove(d)
 		return nil, err
@@ -165,14 +209,39 @@ func (fs *Filesystem) SpaceAvailableForDecompression(ctx context.Context, dir st
 // zip-slip attack being attempted by validating that the final path is within
 // the server data directory.
 func (fs *Filesystem) DecompressFile(ctx context.Context, dir string, file string) error {
+	return fs.DecompressFileWith(ctx, dir, file, nil)
+}
+
+// countReader tells how much has been read from the archive.
+type countReader struct {
+	io.Reader
+	onRead func(int64)
+}
+
+func (c *countReader) Read(p []byte) (int, error) {
+	n, err := c.Reader.Read(p)
+	if n > 0 {
+		c.onRead(int64(n))
+	}
+
+	return n, err
+}
+
+// DecompressFileWith is DecompressFile that calls onRead with the number of bytes it reads of the archive (when given).
+func (fs *Filesystem) DecompressFileWith(ctx context.Context, dir string, file string, onRead func(int64)) error {
 	f, err := fs.unixFS.Open(filepath.Join(dir, file))
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
+	var source io.Reader = f
+	if onRead != nil {
+		source = &countReader{Reader: f, onRead: onRead}
+	}
+
 	// Identify the type of archive we are dealing with.
-	format, input, err := archives.Identify(ctx, filepath.Base(file), f)
+	format, input, err := archives.Identify(ctx, filepath.Base(file), source)
 	if err != nil {
 		if errors.Is(err, archives.NoMatch) {
 			return newFilesystemError(ErrCodeUnknownArchive, err)

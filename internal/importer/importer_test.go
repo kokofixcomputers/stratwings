@@ -3,11 +3,13 @@ package importer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type fakeSource struct {
@@ -312,5 +314,98 @@ func TestListingsThatNeverEndAreStopped(t *testing.T) {
 	_, _, err := run(t, sample(), newWriter(), Options{Remote: "/srv", Dest: "/", MaxEntries: 3})
 	if err == nil || !strings.Contains(err.Error(), "more than 3") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// slowSource has many folders and every listing takes a while, like a far away SFTP server.
+type slowSource struct {
+	*fakeSource
+	delay time.Duration
+}
+
+func (s *slowSource) List(ctx context.Context, dir string) ([]Entry, error) {
+	time.Sleep(s.delay)
+
+	return s.fakeSource.List(ctx, dir)
+}
+
+func TestManyFoldersAreListedAtTheSameTime(t *testing.T) {
+	base := &fakeSource{workers: 4, failing: map[string]bool{}, tree: map[string][]Entry{}, files: map[string]string{}}
+	var root []Entry
+	for i := 0; i < 120; i++ {
+		name := fmt.Sprintf("d%03d", i)
+		root = append(root, Entry{Name: name, Dir: true})
+		base.tree["/srv/"+name] = []Entry{{Name: "f.txt", Size: 1}}
+		base.files["/srv/"+name+"/f.txt"] = "x"
+	}
+	base.tree["/srv"] = root
+
+	start := time.Now()
+	w := newWriter()
+	sum, _, err := run(t, &slowSource{fakeSource: base, delay: 20 * time.Millisecond}, w, Options{Remote: "/srv", Dest: "/"})
+	took := time.Since(start)
+
+	if err != nil || sum.Done != 120 {
+		t.Fatalf("%+v %v", sum, err)
+	}
+	// One after the other, 121 listings of 20 ms are 2.4 s.
+	if took > 1200*time.Millisecond {
+		t.Errorf("listing the folders took %v, they should go side by side", took)
+	}
+	if len(w.files) != 120 {
+		t.Errorf("%d files written", len(w.files))
+	}
+}
+
+func TestTheOrderOfTheFilesIsFixed(t *testing.T) {
+	_, lines, _ := run(t, sample(), newWriter(), Options{Remote: "/srv", Dest: "/"})
+
+	// Items are sorted before they are numbered: index 0 is the first path in order.
+	for _, l := range lines {
+		if l["event"] == "file" && l["index"] == 0 && l["path"] != "mods/deep/three.jar" {
+			t.Errorf("file 0 is %v", l["path"])
+		}
+	}
+}
+
+// slowRead gives its data after a while, like a big file coming in.
+type slowReadSource struct {
+	*fakeSource
+	wait time.Duration
+}
+
+func (s *slowReadSource) Open(ctx context.Context, file string) (io.ReadCloser, error) {
+	r, err := s.fakeSource.Open(ctx, file)
+	if err != nil {
+		return nil, err
+	}
+	time.Sleep(s.wait)
+
+	return r, nil
+}
+
+func TestProgressIsReportedWhileABigFileIsComingIn(t *testing.T) {
+	old := heartbeat
+	heartbeat = 20 * time.Millisecond
+	defer func() { heartbeat = old }()
+
+	src := &slowReadSource{fakeSource: sample(), wait: 120 * time.Millisecond}
+	src.workers = 1
+	_, lines, err := run(t, src, newWriter(), Options{Remote: "/srv", Dest: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	beats := 0
+	for _, l := range lines {
+		if l["event"] == "progress" {
+			beats++
+			if l["bytesTotal"] != int64(20) {
+				t.Errorf("bytesTotal = %v", l["bytesTotal"])
+			}
+		}
+	}
+	if beats < 3 {
+		t.Errorf("only %d heartbeats during a slow copy", beats)
 	}
 }

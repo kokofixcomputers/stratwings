@@ -3,7 +3,8 @@
 ## Stratosphere fork
 
 ### Added
-* Server importer: `POST /api/servers/{server}/files/import` copies everything from an SFTP or FTP(S) server into the server and streams how far it got (one JSON line per file); `.../import/test` connects and lists the top of the folder and shows the SSH host key fingerprint. Links are not followed, names that could leave the folder are skipped, internal addresses are refused (`remote_download_allowlist` allows some), and `disable_remote_download` turns it off.
+* Background jobs: `/api/servers/{server}/jobs` (list, show, cancel) and `POST .../jobs/{import,compress,decompress,pull}` run imports, archives, extractions and downloads in the background with progress that is kept on disk, see `FORK.md`.
+* Server importer: copies a folder from an SFTP or FTP(S) server into the server as a job; `.../files/import/test` connects and lists the top of the folder and shows the SSH host key fingerprint. Links are not followed, names that could leave the folder are skipped, internal addresses are refused (`remote_download_allowlist` allows some).
 * Self update: `GET`/`POST /api/system/update` downloads the nightly release, checks its checksum, runs it once, swaps it in and restarts. A new binary that fails to stay up three times is replaced by the old one.
 * `wings install <panel-url> <token> [node-id]` configures the node, writes the systemd service and starts it.
 * The panel can push the https certificate of a node (`GET`/`POST /api/certificates`), it is used without a restart, see `FORK.md`.

@@ -2,12 +2,10 @@ package router
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/netip"
 	"path"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,9 +16,6 @@ import (
 	"github.com/pterodactyl/wings/server"
 	"github.com/pterodactyl/wings/server/filesystem"
 )
-
-// importing holds the servers an import is running for: one at a time for each.
-var importing sync.Map
 
 type importRequest struct {
 	Protocol    string `json:"protocol" binding:"required,oneof=sftp ftp"`
@@ -130,60 +125,6 @@ func postServerImportTest(c *gin.Context) {
 	s.Log().WithField("host", req.Host).WithField("protocol", req.Protocol).Info("tested the connection for an import")
 
 	c.JSON(http.StatusOK, gin.H{"fingerprint": src.Fingerprint(), "entries": out, "total": len(entries)})
-}
-
-// Copies the files of the remote server into the server and streams how it goes, one JSON line each. The import stops when the connection
-// of the request ends.
-func postServerImport(c *gin.Context) {
-	s := ExtractServer(c)
-	var req importRequest
-	if err := c.BindJSON(&req); err != nil {
-		return
-	}
-	if !importable(c, s) {
-		return
-	}
-	if _, busy := importing.LoadOrStore(s.ID(), true); busy {
-		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "An import is already running for this server."})
-
-		return
-	}
-	defer importing.Delete(s.ID())
-
-	ctx := c.Request.Context()
-	src, err := importer.Connect(ctx, req.config())
-	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": importMessage(err)})
-
-		return
-	}
-	defer src.Close()
-
-	c.Header("Content-Type", "application/x-ndjson")
-	c.Header("Cache-Control", "no-cache, private")
-	c.Header("X-Accel-Buffering", "no")
-	c.Status(http.StatusOK)
-	flusher, _ := c.Writer.(http.Flusher)
-	enc := json.NewEncoder(c.Writer)
-	emit := func(m map[string]any) {
-		_ = enc.Encode(m)
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-
-	emit(map[string]any{"event": "connected", "fingerprint": src.Fingerprint()})
-	s.Log().WithField("host", req.Host).WithField("protocol", req.Protocol).Info("importing files from a remote server")
-
-	sum, err := importer.Run(ctx, src, fsWriter{s.Filesystem()}, importer.Options{Remote: req.Path, Dest: req.Directory, Overwrite: req.Overwrite}, emit)
-	if err != nil {
-		s.Log().WithField("error", err).Warn("the import stopped")
-		emit(map[string]any{"event": "error", "error": err.Error(), "summary": sum})
-
-		return
-	}
-	s.Log().WithField("files", sum.Done).WithField("failed", sum.Failed).Info("imported files from a remote server")
-	emit(map[string]any{"event": "finished", "summary": sum})
 }
 
 func importMessage(err error) string {

@@ -149,6 +149,8 @@ type Download struct {
 	req        DownloadRequest
 	server     *server.Server
 	progress   float64
+	written    int64
+	total      int64
 	cancelFunc *context.CancelFunc
 }
 
@@ -281,6 +283,22 @@ func (dl *Download) BelongsTo(s *server.Server) bool {
 	return dl.server.ID() == s.ID()
 }
 
+// Written is how many bytes of the file are on the disk so far and Total how many it will be (0 until the other server has said).
+func (dl *Download) Written() int64 {
+	dl.mu.RLock()
+	defer dl.mu.RUnlock()
+
+	return dl.written
+}
+
+// Total is the size of the file.
+func (dl *Download) Total() int64 {
+	dl.mu.RLock()
+	defer dl.mu.RUnlock()
+
+	return dl.total
+}
+
 // Progress returns the current progress of the download as a float value between 0 and 1 where
 // 1 indicates that the download is completed.
 func (dl *Download) Progress() float64 {
@@ -296,10 +314,14 @@ func (dl *Download) Path() string {
 // Handles a write event by updating the progress completed percentage and firing off
 // events to the server websocket as needed.
 func (dl *Download) counter(contentLength int64) *Counter {
+	dl.mu.Lock()
+	dl.total = contentLength
+	dl.mu.Unlock()
 	onWrite := func(t int) {
 		dl.mu.Lock()
 		defer dl.mu.Unlock()
 		dl.progress = float64(t) / float64(contentLength)
+		dl.written = int64(t)
 	}
 	return &Counter{
 		onWrite: onWrite,

@@ -10,6 +10,7 @@ import (
 	"github.com/apex/log"
 	"github.com/gin-gonic/gin"
 
+	"github.com/pterodactyl/wings/internal/jobs"
 	"github.com/pterodactyl/wings/internal/selfupdate"
 	"github.com/pterodactyl/wings/router/middleware"
 	"github.com/pterodactyl/wings/system"
@@ -54,6 +55,8 @@ func postSelfUpdate(c *gin.Context) {
 		log.WithField("from", res.From).WithField("to", res.To).Info("wings was updated, restarting")
 		go func() {
 			time.Sleep(time.Second)
+			// Jobs that are going are stopped and saved first, instead of being lost in the restart.
+			jobs.ShutdownShared(5 * time.Second)
 			if err := selfupdate.Restart(exe); err != nil {
 				log.WithField("error", err).Error("could not restart into the new binary, it is used from the next start")
 			}
