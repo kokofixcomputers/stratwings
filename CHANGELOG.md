@@ -1,5 +1,12 @@
 # Changelog
 
+## Stratosphere fork
+
+### Added
+* The panel can push the https certificate of a node (`GET`/`POST /api/certificates`), it is used without a restart, see `FORK.md`.
+* A node that is not set to use https answers https as well on the same port once it has a certificate.
+* A node set to use https without certificate files starts with a temporary certificate instead of stopping.
+
 ## v1.12.3
 ### Fixed
 * Support properly restricting configuration in egg templating

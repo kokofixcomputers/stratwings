@@ -30,6 +30,7 @@ import (
 
 	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/environment"
+	"github.com/pterodactyl/wings/internal/certstore"
 	"github.com/pterodactyl/wings/internal/cron"
 	"github.com/pterodactyl/wings/internal/database"
 	"github.com/pterodactyl/wings/internal/network"
@@ -327,6 +328,15 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		autotls = false
 	}
 
+	// The certificate the Panel pushes (Admin > Settings > Certificates), kept in the root directory of this node.
+	certificates := certstore.New(path.Join(config.Get().System.RootDirectory, ".panel-tls"))
+	certstore.SetShared(certificates)
+	if loaded, err := certificates.Load(); err != nil {
+		log.WithField("error", err).Error("could not use the certificate that was pushed earlier")
+	} else if loaded {
+		log.Info("using the certificate that the Panel pushed earlier")
+	}
+
 	api := config.Get().Api
 	log.WithFields(log.Fields{
 		"use_ssl":      api.Ssl.Enabled,
@@ -399,15 +409,39 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	// Check if main http server should run with TLS. Otherwise, reset the TLS
 	// config on the server and then serve it over normal HTTP.
 	if api.Ssl.Enabled {
-		if err := s.ServeTLS(listener, api.Ssl.CertificateFile, api.Ssl.KeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		// The certificate the Panel pushed is the one to use. Until it did, the files of the configuration; and when those are not
+		// there either (a node that was just set up) a temporary certificate, so the node starts and can be given the real one.
+		if !certificates.Has() {
+			if pair, err := tls.LoadX509KeyPair(api.Ssl.CertificateFile, api.Ssl.KeyFile); err == nil {
+				certificates.Use(&pair, "file")
+			} else if pair, err := certstore.SelfSigned(hostname()); err == nil {
+				log.WithField("error", err).Warn("no certificate found at the configured location, using a temporary one until the Panel pushes a certificate")
+				certificates.Use(pair, "self-signed")
+			}
+		}
+		s.TLSConfig.GetCertificate = certificates.GetCertificate
+		if err := s.ServeTLS(listener, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.WithFields(log.Fields{"auto_tls": false, "error": err}).Fatal("failed to configure HTTPS server")
 		}
 		return
 	}
+
+	// Not set to use https: plain http as always, but a connection that starts a TLS handshake is accepted too once the Panel has
+	// pushed a certificate, so https can be switched on in the Panel without touching this machine.
 	s.TLSConfig = nil
-	if err := s.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	mixed := config.DefaultTLSConfig.Clone()
+	mixed.NextProtos = []string{"http/1.1"}
+	mixed.GetCertificate = certificates.GetCertificate
+	if err := s.Serve(certstore.SniffListener(listener, mixed)); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.WithField("error", err).Fatal("failed to configure HTTP server")
 	}
+}
+
+// hostname is the name a temporary certificate is made for.
+func hostname() string {
+	name, _ := os.Hostname()
+
+	return name
 }
 
 // shutdownOnSignal waits for a signal, then saves the state of every server and

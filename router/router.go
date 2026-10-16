@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/pterodactyl/wings/config"
+	"github.com/pterodactyl/wings/internal/certstore"
 	"github.com/pterodactyl/wings/remote"
 	"github.com/pterodactyl/wings/router/middleware"
 	wserver "github.com/pterodactyl/wings/server"
@@ -102,6 +103,10 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 	// and will not be accessible without the correct Authorization header provided.
 	protected := router.Use(middleware.RequireAuthorization())
 	protected.POST("/api/update", postUpdateConfiguration)
+	// The certificate of this node, pushed by the Panel (Admin > Settings > Certificates).
+	certificates := gin.WrapH(certstore.Handler(certstore.Shared()))
+	protected.GET("/api/certificates", certificates)
+	protected.POST("/api/certificates", certificates)
 	protected.GET("/api/system", getSystemInformation)
 	protected.GET("/api/servers", getAllServers)
 	protected.POST("/api/servers", postCreateServer)
