@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/client"
 
 	"github.com/pterodactyl/wings/config"
+	"github.com/pterodactyl/wings/environment"
 )
 
 // cgroupV2 reports whether the host uses the unified cgroup v2 hierarchy.
@@ -39,6 +40,20 @@ func cpuBurstMicroseconds(quota int64, percent int64) int64 {
 // resolveCgroupCpuFile parses the contents of a /proc/<pid>/cgroup file and
 // returns the absolute path of the CFS burst file for that process's cgroup.
 func resolveCgroupCpuFile(procCgroup string, v2 bool) (string, error) {
+	if v2 {
+		return resolveCgroupFile(procCgroup, true, "cpu.max.burst", "")
+	}
+	return resolveCgroupFile(procCgroup, false, "", "cpu.cfs_burst_us")
+}
+
+// resolveCgroupCpuStatFile is the cpu.stat file of the same cgroup, which holds the burst counters.
+func resolveCgroupCpuStatFile(procCgroup string, v2 bool) (string, error) {
+	return resolveCgroupFile(procCgroup, v2, "cpu.stat", "cpu.stat")
+}
+
+// resolveCgroupFile finds a file of the cpu cgroup in the contents of /proc/<pid>/cgroup, named
+// differently on cgroup v2 and v1.
+func resolveCgroupFile(procCgroup string, v2 bool, v2name string, v1name string) (string, error) {
 	for _, line := range strings.Split(procCgroup, "\n") {
 		parts := strings.SplitN(line, ":", 3)
 		if len(parts) != 3 || !strings.HasPrefix(parts[2], "/") || strings.Contains(parts[2], "..") {
@@ -46,13 +61,13 @@ func resolveCgroupCpuFile(procCgroup string, v2 bool) (string, error) {
 		}
 		if v2 {
 			if parts[0] == "0" && parts[1] == "" {
-				return path.Join("/sys/fs/cgroup", parts[2], "cpu.max.burst"), nil
+				return path.Join("/sys/fs/cgroup", parts[2], v2name), nil
 			}
 			continue
 		}
 		for _, controller := range strings.Split(parts[1], ",") {
 			if controller == "cpu" {
-				return path.Join("/sys/fs/cgroup/cpu", parts[2], "cpu.cfs_burst_us"), nil
+				return path.Join("/sys/fs/cgroup/cpu", parts[2], v1name), nil
 			}
 		}
 	}
@@ -105,11 +120,16 @@ func logBurstFailure(l *log.Entry, burst int64) {
 // bursting is disabled or the container has no CPU limit.
 func SetCpuBurst(ctx context.Context, cli *client.Client, containerID string, quota int64) {
 	cfg := config.Get().Docker.CpuBurst
-	if !cfg.Enabled || quota <= 0 {
+	if quota <= 0 {
 		return
 	}
 	c, err := cli.ContainerInspect(ctx, containerID)
 	if err != nil || c.State == nil {
+		return
+	}
+	// Switched off: a burst that was set while it was on must not stay in the cgroup of a container that lives on.
+	if !cfg.Enabled {
+		writeCpuBurst(log.WithField("container_id", containerID), c.State.Pid, 0)
 		return
 	}
 	writeCpuBurst(log.WithField("container_id", containerID), c.State.Pid, cpuBurstMicroseconds(quota, cfg.Percent))
@@ -128,4 +148,67 @@ func (e *Environment) applyCpuBurst(ctx context.Context) {
 // before the feature was turned off cannot block future quota changes.
 func (e *Environment) clearCpuBurst(pid int) {
 	writeCpuBurst(e.log(), pid, 0)
+}
+
+// parseCpuBurstStats reads the burst counters out of the contents of a cpu.stat file: nr_bursts and
+// burst_usec on cgroup v2, nr_bursts and burst_time (nanoseconds) on v1. Nil when they are not there,
+// which is how a kernel older than 5.14 looks.
+func parseCpuBurstStats(content string, v2 bool) *environment.CpuBurstStats {
+	var periods, amount uint64
+	havePeriods, haveAmount := false, false
+	key := "burst_usec"
+	if !v2 {
+		key = "burst_time"
+	}
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		v, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		switch fields[0] {
+		case "nr_bursts":
+			periods, havePeriods = v, true
+		case key:
+			amount, haveAmount = v, true
+		}
+	}
+	if !havePeriods || !haveAmount {
+		return nil
+	}
+	if !v2 {
+		amount /= 1000
+	}
+	return &environment.CpuBurstStats{Periods: periods, Microseconds: amount}
+}
+
+// cpuStatFile finds the cpu.stat file of the container's cgroup. Empty when it cannot be found.
+func cpuStatFile(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cgroup")
+	if err != nil {
+		return ""
+	}
+	f, err := resolveCgroupCpuStatFile(string(b), cgroupV2())
+	if err != nil {
+		return ""
+	}
+	return f
+}
+
+// readCpuBurstStats reads the burst counters from a cpu.stat file, nil when that fails.
+func readCpuBurstStats(file string) *environment.CpuBurstStats {
+	if file == "" {
+		return nil
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return nil
+	}
+	return parseCpuBurstStats(string(b), cgroupV2())
 }

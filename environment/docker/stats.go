@@ -51,6 +51,13 @@ func (e *Environment) pollResources(ctx context.Context) error {
 		e.log().WithField("error", err).Warn("failed to calculate container uptime")
 	}
 
+	// The cpu.stat of the container's cgroup holds the burst counters. Found once, and given up on
+	// when it cannot be read (not every host lets Wings see it).
+	var statFile string
+	if ins, err := e.ContainerInspect(ctx); err == nil && ins.State != nil {
+		statFile = cpuStatFile(ins.State.Pid)
+	}
+
 	dec := json.NewDecoder(stats.Body)
 	for {
 		select {
@@ -83,6 +90,12 @@ func (e *Environment) pollResources(ctx context.Context) error {
 				MemoryLimit: v.MemoryStats.Limit,
 				CpuAbsolute: calculateDockerAbsoluteCpu(v.PreCPUStats, v.CPUStats),
 				Network:     environment.NetworkStats{},
+			}
+
+			if statFile != "" {
+				if st.CpuBurst = readCpuBurstStats(statFile); st.CpuBurst == nil {
+					statFile = ""
+				}
 			}
 
 			for _, nw := range v.Networks {

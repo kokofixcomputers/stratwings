@@ -103,3 +103,40 @@ func TestResolveCgroupCpuFile(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCpuBurstStats(t *testing.T) {
+	v2 := "usage_usec 100\nuser_usec 60\nsystem_usec 40\nnr_periods 50\nnr_throttled 4\nthrottled_usec 800\nnr_bursts 3\nburst_usec 1500\n"
+	got := parseCpuBurstStats(v2, true)
+	if got == nil || got.Periods != 3 || got.Microseconds != 1500 {
+		t.Fatalf("v2: unexpected %+v", got)
+	}
+
+	// cgroup v1 counts the burst time in nanoseconds.
+	v1 := "nr_periods 50\nnr_throttled 4\nthrottled_time 800000\nnr_bursts 2\nburst_time 2500000\n"
+	got = parseCpuBurstStats(v1, false)
+	if got == nil || got.Periods != 2 || got.Microseconds != 2500 {
+		t.Fatalf("v1: unexpected %+v", got)
+	}
+
+	// A kernel older than 5.14 has no burst counters at all.
+	if parseCpuBurstStats("nr_periods 5\nnr_throttled 0\nthrottled_usec 0\n", true) != nil {
+		t.Fatal("expected nil without burst counters")
+	}
+	if parseCpuBurstStats("", true) != nil || parseCpuBurstStats("nr_bursts x\nburst_usec 1\n", true) != nil {
+		t.Fatal("expected nil for an unreadable file")
+	}
+}
+
+func TestResolveCgroupCpuStatFile(t *testing.T) {
+	f, err := resolveCgroupCpuStatFile("0::/system.slice/docker-abc123.scope\n", true)
+	if err != nil || f != "/sys/fs/cgroup/system.slice/docker-abc123.scope/cpu.stat" {
+		t.Fatalf("v2: %q %v", f, err)
+	}
+	f, err = resolveCgroupCpuStatFile("4:cpu,cpuacct:/docker/abc123\n1:name=systemd:/docker/abc123\n", false)
+	if err != nil || f != "/sys/fs/cgroup/cpu/docker/abc123/cpu.stat" {
+		t.Fatalf("v1: %q %v", f, err)
+	}
+	if _, err := resolveCgroupCpuStatFile("0::/../../etc\n", true); err == nil {
+		t.Fatal("a path that climbs out of the cgroup must be refused")
+	}
+}

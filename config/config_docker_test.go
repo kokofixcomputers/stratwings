@@ -119,3 +119,33 @@ func TestDockerRegistryPathCredentialsDoNotMatchSiblingPath(t *testing.T) {
 		t.Fatalf("expected no registry credentials, got username %q", registry.Username)
 	}
 }
+
+func TestPanelConfigurationCarriesCpuBurst(t *testing.T) {
+	c := &Configuration{}
+	c.Docker.CpuBurst.Enabled = true
+	c.Docker.CpuBurst.Percent = 100
+
+	// What the panel sends is applied, and a missing value keeps the current one.
+	p := c.PanelConfiguration()
+	if !p.Docker.CpuBurst.Enabled || p.Docker.CpuBurst.Percent != 100 {
+		t.Fatalf("the current burst setting is part of the panel's view: %+v", p.Docker.CpuBurst)
+	}
+	p.Docker.CpuBurst.Enabled = false
+	p.Docker.CpuBurst.Percent = 40
+	c.ApplyPanelConfiguration(p)
+	if c.Docker.CpuBurst.Enabled || c.Docker.CpuBurst.Percent != 40 {
+		t.Fatalf("burst was not applied: %+v", c.Docker.CpuBurst)
+	}
+
+	// Nothing the kernel would refuse gets through.
+	p.Docker.CpuBurst.Percent = 900
+	c.ApplyPanelConfiguration(p)
+	if c.Docker.CpuBurst.Percent != 100 {
+		t.Fatalf("percent above 100 must be capped, got %d", c.Docker.CpuBurst.Percent)
+	}
+	p.Docker.CpuBurst.Percent = -5
+	c.ApplyPanelConfiguration(p)
+	if c.Docker.CpuBurst.Percent != 0 {
+		t.Fatalf("a negative percent must become 0, got %d", c.Docker.CpuBurst.Percent)
+	}
+}

@@ -17,6 +17,11 @@ type Stats struct {
 	// does not take into account any limits on the server process itself.
 	CpuAbsolute float64 `json:"cpu_absolute"`
 
+	// How much the container has spent of the CFS burst, from the cpu.stat of its cgroup. Nil when
+	// it cannot be read (an older kernel, or a cgroup Wings cannot see). The numbers only grow, a
+	// reader looks at the difference between two samples to know whether the server is bursting now.
+	CpuBurst *CpuBurstStats `json:"cpu_burst,omitempty"`
+
 	// Current network transmit in & out for a container.
 	Network NetworkStats `json:"network"`
 
@@ -27,4 +32,14 @@ type Stats struct {
 type NetworkStats struct {
 	RxBytes uint64 `json:"rx_bytes"`
 	TxBytes uint64 `json:"tx_bytes"`
+}
+
+// CpuBurstStats are the cumulative counters of the kernel for CFS bursting since the container
+// was created.
+type CpuBurstStats struct {
+	// Periods is the number of scheduling periods in which the container used burst (nr_bursts).
+	Periods uint64 `json:"periods"`
+
+	// Microseconds is the time spent on burst in total (burst_usec).
+	Microseconds uint64 `json:"microseconds"`
 }

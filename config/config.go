@@ -415,6 +415,14 @@ type PanelConfiguration struct {
 			Port int `json:"bind_port"`
 		} `json:"sftp"`
 	} `json:"system"`
+	// Docker holds the one setting of the containers the Panel may change: whether servers may
+	// burst above their CPU limit (see CpuBurst in the Docker configuration).
+	Docker struct {
+		CpuBurst struct {
+			Enabled bool  `json:"enabled"`
+			Percent int64 `json:"percent"`
+		} `json:"cpu_burst"`
+	} `json:"docker"`
 }
 
 // PanelConfiguration returns the values in the configuration that the Panel is
@@ -432,6 +440,8 @@ func (c *Configuration) PanelConfiguration() PanelConfiguration {
 	p.Api.Ssl.KeyFile = c.Api.Ssl.KeyFile
 	p.Api.UploadLimit = c.Api.UploadLimit
 	p.System.Sftp.Port = c.System.Sftp.Port
+	p.Docker.CpuBurst.Enabled = c.Docker.CpuBurst.Enabled
+	p.Docker.CpuBurst.Percent = c.Docker.CpuBurst.Percent
 	return p
 }
 
@@ -449,6 +459,9 @@ func (c *Configuration) ApplyPanelConfiguration(p PanelConfiguration) {
 	c.Api.Ssl.KeyFile = p.Api.Ssl.KeyFile
 	c.Api.UploadLimit = p.Api.UploadLimit
 	c.System.Sftp.Port = p.System.Sftp.Port
+	c.Docker.CpuBurst.Enabled = p.Docker.CpuBurst.Enabled
+	// The kernel takes at most the whole quota as burst.
+	c.Docker.CpuBurst.Percent = min(max(p.Docker.CpuBurst.Percent, 0), 100)
 }
 
 // NewAtPath creates a new struct and set the path where it should be stored.
