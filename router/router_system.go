@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/apex/log"
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,7 @@ import (
 	"github.com/pterodactyl/wings/server"
 	"github.com/pterodactyl/wings/server/installer"
 	"github.com/pterodactyl/wings/system"
+	"github.com/pterodactyl/wings/tunnel"
 )
 
 // Returns information about the system that wings is running on.
@@ -218,4 +220,22 @@ func postDeauthorizeUser(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// The Panel says that the tunnels changed (a tunnel was opened or closed in the Network tab of a server). The node looks at what is wanted
+// and opens or closes tunnels, which is quick enough to be done after the answer is sent: the Panel looks at the result when it asks.
+func postTunnelsSync(c *gin.Context) {
+	if tunnel.Default == nil {
+		c.AbortWithStatusJSON(http.StatusNotImplemented, gin.H{"error": "This node does not open tunnels."})
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := tunnel.Default.Sync(ctx); err != nil {
+			log.WithField("error", err).Warn("could not sync tunnels")
+		}
+	}()
+	c.Status(http.StatusAccepted)
 }

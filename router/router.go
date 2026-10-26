@@ -109,6 +109,8 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 	protected.POST("/api/certificates", certificates)
 	protected.GET("/api/system", getSystemInformation)
 	protected.GET("/api/system/update", getSelfUpdate)
+	// The Panel says that somebody opened or closed a tunnel: this node looks at what is wanted again.
+	protected.POST("/api/tunnels/sync", postTunnelsSync)
 	protected.POST("/api/system/update", postSelfUpdate)
 	protected.GET("/api/servers", getAllServers)
 	protected.POST("/api/servers", postCreateServer)

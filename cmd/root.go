@@ -41,6 +41,7 @@ import (
 	"github.com/pterodactyl/wings/server"
 	"github.com/pterodactyl/wings/sftp"
 	"github.com/pterodactyl/wings/system"
+	"github.com/pterodactyl/wings/tunnel"
 )
 
 var (
@@ -148,6 +149,12 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	if err := database.Initialize(); err != nil {
 		log.WithField("error", err).Fatal("failed to initialize database")
 		return
+	}
+
+	// Ports that the Panel wants reachable from the internet, through a tunnel service.
+	if src, ok := pclient.(tunnelClient); ok {
+		tunnel.Default = tunnel.NewManager(tunnelSource{src}, tunnel.NewNgrok())
+		go tunnel.Default.Run(cmd.Context())
 	}
 
 	manager, err := server.NewManager(cmd.Context(), pclient)
@@ -570,4 +577,27 @@ for this issue, it will be closed.[reset]
 
 `), config.DefaultLocation)
 	os.Exit(1)
+}
+
+// tunnelClient is the part of the client of the Panel that is about tunnels.
+type tunnelClient interface {
+	Tunnels(ctx context.Context) (remote.TunnelConfig, error)
+	ReportTunnel(ctx context.Context, id int, state, address, message string) error
+}
+
+// tunnelSource tells the tunnel manager what the Panel wants, in its own types.
+type tunnelSource struct{ client tunnelClient }
+
+func (s tunnelSource) Tunnels(ctx context.Context) (tunnel.Config, error) {
+	config, err := s.client.Tunnels(ctx)
+	out := tunnel.Config{Token: config.Token}
+	for _, t := range config.Tunnels {
+		out.Tunnels = append(out.Tunnels, tunnel.Tunnel{ID: t.ID, IP: t.IP, Port: t.Port})
+	}
+
+	return out, err
+}
+
+func (s tunnelSource) ReportTunnel(ctx context.Context, id int, state, address, message string) error {
+	return s.client.ReportTunnel(ctx, id, state, address, message)
 }
