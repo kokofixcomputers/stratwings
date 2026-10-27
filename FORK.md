@@ -20,7 +20,7 @@ a node its https certificate**, so a node needs no certbot, no files and no rest
   ports to open, which service and the token to use, opens them and reports the public address back (`POST /api/remote/tunnels/{id}`). ngrok is
   the ngrok agent built into Wings, Pinggy is an SSH connection made by Wings (the host key of the first connection is kept in
   `<root_directory>/.tunnels`), and playit makes the tunnels through the API of playit.gg and runs `playitd --secret <key>` (from the playit
-  package, it has to be installed on the node) while a tunnel is open. The panel says when
+  package, it has to be installed on the node) while a tunnel is open. A tunnel is open while its server is running: it closes when the server stops and opens again when it starts (the node looks every few seconds; the panel shows it as waiting). The panel says when
   something changed with `POST /api/tunnels/sync`; the node also looks every three minutes and when it starts, which opens a tunnel that
   failed. Code: `tunnel/`.
 

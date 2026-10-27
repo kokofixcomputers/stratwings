@@ -19,6 +19,8 @@ type Tunnel struct {
 	ID   int
 	IP   string
 	Port int
+	// The server the port belongs to: its tunnel is open while it runs.
+	Server string
 }
 
 // Config is what the Panel wants this node to have open: the token of the tunnel service, and the tunnels.
@@ -69,15 +71,21 @@ type Manager struct {
 	source   Source
 	starters map[string]Starter
 
+	// Active says whether a server is running (or starting), which is when its tunnels are open. Nil means always.
+	Active func(server string) bool
+
 	mu       sync.Mutex
+	config   Config
 	provider string
 	token    string
 	tunnels  map[int]*running
-	synced   chan struct{}
+	// The tunnels that failed to open, which are tried again at the next sync, and the ones the Panel was told are waiting.
+	failed map[int]bool
+	told   map[int]bool
 }
 
 func NewManager(source Source, starters map[string]Starter) *Manager {
-	return &Manager{source: source, starters: starters, tunnels: map[int]*running{}, synced: make(chan struct{}, 1)}
+	return &Manager{source: source, starters: starters, tunnels: map[int]*running{}, failed: map[int]bool{}, told: map[int]bool{}}
 }
 
 // Upstream is the address of a port of this machine: a server that listens on every address is reached on the loopback one.
@@ -88,7 +96,8 @@ func Upstream(ip string, port int) string {
 	return net.JoinHostPort(ip, fmt.Sprint(port))
 }
 
-// Sync makes the open tunnels the ones the Panel asks for.
+// Sync asks the Panel what it wants and makes the open tunnels those, for the servers that are running. It also gives the tunnels that failed
+// another try.
 func (m *Manager) Sync(ctx context.Context) error {
 	config, err := m.source.Tunnels(ctx)
 	if err != nil {
@@ -97,7 +106,28 @@ func (m *Manager) Sync(ctx context.Context) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.config = config
+	m.failed = map[int]bool{}
+	m.apply(ctx)
 
+	return nil
+}
+
+// Reconcile does the same with what the Panel said last, without asking: a tunnel is open while its server is running, so it follows the
+// server when it starts and stops.
+func (m *Manager) Reconcile(ctx context.Context) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.apply(ctx)
+}
+
+func (m *Manager) active(server string) bool {
+	return m.Active == nil || m.Active(server)
+}
+
+// apply must be called with the lock held.
+func (m *Manager) apply(ctx context.Context) {
+	config := m.config
 	provider := config.Provider
 	if provider == "" {
 		provider = NgrokProvider
@@ -111,10 +141,16 @@ func (m *Manager) Sync(ctx context.Context) error {
 	}
 
 	wanted := map[int]Tunnel{}
+	waiting := map[int]Tunnel{}
 	for _, t := range config.Tunnels {
-		wanted[t.ID] = t
+		if m.active(t.Server) {
+			wanted[t.ID] = t
+		} else {
+			waiting[t.ID] = t
+		}
 	}
 
+	// What is not wanted any more, or is for a server that stopped, is closed.
 	for id, r := range m.tunnels {
 		t, still := wanted[id]
 		if still && Upstream(t.IP, t.Port) == r.upstream {
@@ -124,17 +160,32 @@ func (m *Manager) Sync(ctx context.Context) error {
 		delete(m.tunnels, id)
 	}
 
+	// The tunnels of servers that are not running wait for them, and the Panel is told once.
+	for id := range m.told {
+		if _, ok := waiting[id]; !ok {
+			delete(m.told, id)
+		}
+	}
+	for id := range waiting {
+		if !m.told[id] {
+			m.told[id] = true
+			m.report(ctx, id, "waiting", "", "It opens when the server starts.")
+		}
+	}
+
 	for id, t := range wanted {
-		if _, ok := m.tunnels[id]; ok {
+		if _, ok := m.tunnels[id]; ok || m.failed[id] {
 			continue
 		}
 		starter, known := m.starters[provider]
 		if !known {
+			m.failed[id] = true
 			m.report(ctx, id, "failed", "", "This node does not know the tunnel service "+provider+".")
 			continue
 		}
 		// Pinggy has a free plan that needs no token, the others do.
 		if config.Token == "" && provider != PinggyProvider {
+			m.failed[id] = true
 			m.report(ctx, id, "failed", "", "No tunnel token is set in the Panel.")
 			continue
 		}
@@ -143,15 +194,15 @@ func (m *Manager) Sync(ctx context.Context) error {
 		open, err := starter.Start(ctx, config.Token, upstream)
 		if err != nil {
 			log.WithField("tunnel", id).WithField("error", err).Warn("could not open a tunnel")
+			m.failed[id] = true
 			m.report(ctx, id, "failed", "", cleanError(err))
 			continue
 		}
 		m.tunnels[id] = &running{open: open, upstream: upstream}
+		delete(m.told, id)
 		m.report(ctx, id, "active", open.Address(), "")
 		go m.watch(id, open)
 	}
-
-	return nil
 }
 
 // watch tells the Panel when a tunnel goes away by itself, and lets the next sync open it again.
@@ -162,6 +213,8 @@ func (m *Manager) watch(id int, open Open) {
 	defer m.mu.Unlock()
 	if r, ok := m.tunnels[id]; ok && r.open == open {
 		delete(m.tunnels, id)
+		// It is tried again at the next sync, not at once: a tunnel that keeps closing would be opened over and over.
+		m.failed[id] = true
 		m.report(context.Background(), id, "failed", "", "The tunnel was closed, it is opened again soon.")
 	}
 }
@@ -181,21 +234,31 @@ func (m *Manager) report(ctx context.Context, id int, state, address, message st
 	}
 }
 
-// Run syncs now, and again every few minutes: that opens the tunnels that failed or went away, and finds the ones the Panel changed while this
-// node could not be reached.
+// Run asks the Panel what it wants now and every few minutes (that finds changes made while this node could not be reached, and tries the
+// tunnels that failed again), and looks at which servers are running every few seconds.
 func (m *Manager) Run(ctx context.Context) {
-	for {
-		if err := m.Sync(ctx); err != nil {
-			log.WithField("error", err).Debug("could not ask the Panel for tunnels")
-		}
+	if err := m.Sync(ctx); err != nil {
+		log.WithField("error", err).Debug("could not ask the Panel for tunnels")
+	}
 
+	reconcile := time.NewTicker(3 * time.Second)
+	defer reconcile.Stop()
+	sync := time.NewTicker(3 * time.Minute)
+	defer sync.Stop()
+
+	for {
 		select {
 		case <-ctx.Done():
 			m.mu.Lock()
 			m.closeAll()
 			m.mu.Unlock()
 			return
-		case <-time.After(3 * time.Minute):
+		case <-reconcile.C:
+			m.Reconcile(ctx)
+		case <-sync.C:
+			if err := m.Sync(ctx); err != nil {
+				log.WithField("error", err).Debug("could not ask the Panel for tunnels")
+			}
 		}
 	}
 }

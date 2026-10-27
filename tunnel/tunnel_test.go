@@ -170,3 +170,73 @@ func TestATunnelThatGoesAwayIsReported(t *testing.T) {
 		t.Fatalf("a closed tunnel should be forgotten")
 	}
 }
+
+func TestATunnelIsOpenWhileItsServerRuns(t *testing.T) {
+	source := &fakeSource{config: Config{Token: "tok", Tunnels: []Tunnel{{ID: 1, IP: "", Port: 25565, Server: "aaa"}, {ID: 2, IP: "", Port: 25566, Server: "bbb"}}}}
+	starter := &fakeStarter{}
+	m := NewManager(source, map[string]Starter{NgrokProvider: starter})
+	running := map[string]bool{"aaa": true, "bbb": false}
+	m.Active = func(server string) bool { return running[server] }
+
+	_ = m.Sync(context.Background())
+	if m.Count() != 1 || len(starter.started) != 1 {
+		t.Fatalf("only the tunnel of the server that runs should be open: %d open", m.Count())
+	}
+	// The other is told it waits, once.
+	waiting := 0
+	for _, r := range source.reports {
+		if r == "waiting  It opens when the server starts." {
+			waiting++
+		}
+	}
+	if waiting != 1 {
+		t.Fatalf("the Panel should be told once that a tunnel waits: %v", source.reports)
+	}
+	m.Reconcile(context.Background())
+	m.Reconcile(context.Background())
+	if len(source.reports) != 2 {
+		t.Fatalf("nothing changed, nothing should be reported: %v", source.reports)
+	}
+
+	// The first server stops, the second starts.
+	running["aaa"], running["bbb"] = false, true
+	m.Reconcile(context.Background())
+	if m.Count() != 1 || !starter.opened[0].closed || len(starter.started) != 2 || starter.started[1] != "127.0.0.1:25566" {
+		t.Fatalf("the tunnel should follow the servers: started %v", starter.started)
+	}
+
+	// And the first starts again: it is opened again.
+	running["aaa"] = true
+	m.Reconcile(context.Background())
+	if m.Count() != 2 || len(starter.started) != 3 {
+		t.Fatalf("a tunnel should open again with its server: %d open", m.Count())
+	}
+	last := source.reports[len(source.reports)-1]
+	if last[:6] != "active" {
+		t.Fatalf("the Panel should be told it is active: %v", source.reports)
+	}
+}
+
+func TestAFailedTunnelIsOnlyTriedAgainAtTheNextSync(t *testing.T) {
+	source := &fakeSource{config: Config{Token: "tok", Tunnels: []Tunnel{{ID: 1, IP: "", Port: 25565, Server: "aaa"}}}}
+	starter := &fakeStarter{fail: errors.New("not today")}
+	m := NewManager(source, map[string]Starter{NgrokProvider: starter})
+	m.Active = func(string) bool { return true }
+
+	_ = m.Sync(context.Background())
+	m.Reconcile(context.Background())
+	m.Reconcile(context.Background())
+	if len(source.reports) != 1 {
+		t.Fatalf("a failure is told once, not every few seconds: %v", source.reports)
+	}
+
+	starter.fail = nil
+	m.Reconcile(context.Background())
+	if m.Count() != 0 {
+		t.Fatalf("a reconcile should not try a failed tunnel again")
+	}
+	_ = m.Sync(context.Background())
+	if m.Count() != 1 {
+		t.Fatalf("a sync should")
+	}
+}

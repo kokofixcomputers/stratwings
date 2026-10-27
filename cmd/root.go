@@ -151,6 +151,12 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 		return
 	}
 
+	manager, err := server.NewManager(cmd.Context(), pclient)
+	if err != nil {
+		log.WithField("error", err).Fatal("failed to load server configurations")
+		return
+	}
+
 	// Ports that the Panel wants reachable from the internet, through a tunnel service.
 	if src, ok := pclient.(tunnelClient); ok {
 		tunnel.Default = tunnel.NewManager(tunnelSource{src}, map[string]tunnel.Starter{
@@ -158,13 +164,16 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 			tunnel.PinggyProvider: tunnel.NewPinggy(filepath.Join(config.Get().System.RootDirectory, ".tunnels")),
 			tunnel.PlayitProvider: tunnel.NewPlayit(),
 		})
+		// A tunnel is open while its server is running.
+		tunnel.Default.Active = func(uuid string) bool {
+			s, ok := manager.Get(uuid)
+			if !ok {
+				return false
+			}
+			state := s.Environment.State()
+			return state == environment.ProcessRunningState || state == environment.ProcessStartingState
+		}
 		go tunnel.Default.Run(cmd.Context())
-	}
-
-	manager, err := server.NewManager(cmd.Context(), pclient)
-	if err != nil {
-		log.WithField("error", err).Fatal("failed to load server configurations")
-		return
 	}
 
 	if err := environment.ConfigureDocker(cmd.Context()); err != nil {
@@ -596,7 +605,7 @@ func (s tunnelSource) Tunnels(ctx context.Context) (tunnel.Config, error) {
 	config, err := s.client.Tunnels(ctx)
 	out := tunnel.Config{Provider: config.Provider, Token: config.Token}
 	for _, t := range config.Tunnels {
-		out.Tunnels = append(out.Tunnels, tunnel.Tunnel{ID: t.ID, IP: t.IP, Port: t.Port})
+		out.Tunnels = append(out.Tunnels, tunnel.Tunnel{ID: t.ID, IP: t.IP, Port: t.Port, Server: t.Server})
 	}
 
 	return out, err

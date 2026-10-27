@@ -10,6 +10,8 @@ type Tunnel struct {
 	ID   int    `json:"id"`
 	IP   string `json:"ip"`
 	Port int    `json:"port"`
+	// The uuid of the server whose port it is.
+	Server string `json:"server"`
 }
 
 // TunnelConfig is what the Panel wants this node to have open: the token of the tunnel service, and the tunnels.
