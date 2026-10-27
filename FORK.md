@@ -15,9 +15,12 @@ a node its https certificate**, so a node needs no certbot, no files and no rest
 - A node that **is** set to use https prefers the pushed certificate, then the files of `api.ssl.cert` / `api.ssl.key`, and when neither exists
   (a node that was just set up) a temporary self signed one, so it starts instead of stopping; the panel then gives it the real one.
 
-- **Tunnels.** The panel can open ports of servers to the internet through [ngrok](https://ngrok.com), so a server can be played without
-  port forwarding. This node asks the panel (`GET /api/remote/tunnels`) which ports to open and the ngrok token to use, opens them with the ngrok
-  agent that is built into Wings (no extra program) and reports the public address back (`POST /api/remote/tunnels/{id}`). The panel says when
+- **Tunnels.** The panel can open ports of servers to the internet through [ngrok](https://ngrok.com), [Pinggy](https://pinggy.io) or
+  [playit.gg](https://playit.gg), so a server can be played without port forwarding. This node asks the panel (`GET /api/remote/tunnels`) which
+  ports to open, which service and the token to use, opens them and reports the public address back (`POST /api/remote/tunnels/{id}`). ngrok is
+  the ngrok agent built into Wings, Pinggy is an SSH connection made by Wings (the host key of the first connection is kept in
+  `<root_directory>/.tunnels`), and playit makes the tunnels through the API of playit.gg and runs `playitd --secret <key>` (from the playit
+  package, it has to be installed on the node) while a tunnel is open. The panel says when
   something changed with `POST /api/tunnels/sync`; the node also looks every three minutes and when it starts, which opens a tunnel that
   failed. Code: `tunnel/`.
 

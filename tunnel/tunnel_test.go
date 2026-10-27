@@ -78,7 +78,7 @@ func TestUpstream(t *testing.T) {
 func TestSyncOpensWhatIsAskedForAndClosesTheRest(t *testing.T) {
 	source := &fakeSource{config: Config{Token: "tok", Tunnels: []Tunnel{{ID: 1, IP: "0.0.0.0", Port: 25565}, {ID: 2, IP: "10.0.0.4", Port: 25570}}}}
 	starter := &fakeStarter{}
-	m := NewManager(source, starter)
+	m := NewManager(source, map[string]Starter{NgrokProvider: starter})
 
 	if err := m.Sync(context.Background()); err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestSyncOpensWhatIsAskedForAndClosesTheRest(t *testing.T) {
 func TestANewTokenOpensEverythingAgain(t *testing.T) {
 	source := &fakeSource{config: Config{Token: "one", Tunnels: []Tunnel{{ID: 1, IP: "", Port: 25565}}}}
 	starter := &fakeStarter{}
-	m := NewManager(source, starter)
+	m := NewManager(source, map[string]Starter{NgrokProvider: starter})
 	_ = m.Sync(context.Background())
 
 	source.config.Token = "two"
@@ -130,7 +130,7 @@ func TestANewTokenOpensEverythingAgain(t *testing.T) {
 func TestAFailureIsReportedAndTriedAgain(t *testing.T) {
 	source := &fakeSource{config: Config{Token: "tok", Tunnels: []Tunnel{{ID: 7, IP: "", Port: 25565}}}}
 	starter := &fakeStarter{fail: errors.New("authentication failed: the token is not valid\nERR_NGROK_105")}
-	m := NewManager(source, starter)
+	m := NewManager(source, map[string]Starter{NgrokProvider: starter})
 
 	_ = m.Sync(context.Background())
 	if m.Count() != 0 || len(source.reports) != 1 || source.reports[0] != "failed  authentication failed: the token is not valid" {
@@ -147,7 +147,7 @@ func TestAFailureIsReportedAndTriedAgain(t *testing.T) {
 func TestWithoutATokenNothingIsOpened(t *testing.T) {
 	source := &fakeSource{config: Config{Tunnels: []Tunnel{{ID: 1, IP: "", Port: 25565}}}}
 	starter := &fakeStarter{}
-	m := NewManager(source, starter)
+	m := NewManager(source, map[string]Starter{NgrokProvider: starter})
 	_ = m.Sync(context.Background())
 
 	if m.Count() != 0 || len(starter.started) != 0 || len(source.reports) != 1 {
@@ -158,7 +158,7 @@ func TestWithoutATokenNothingIsOpened(t *testing.T) {
 func TestATunnelThatGoesAwayIsReported(t *testing.T) {
 	source := &fakeSource{config: Config{Token: "tok", Tunnels: []Tunnel{{ID: 1, IP: "", Port: 25565}}}}
 	starter := &fakeStarter{}
-	m := NewManager(source, starter)
+	m := NewManager(source, map[string]Starter{NgrokProvider: starter})
 	_ = m.Sync(context.Background())
 
 	starter.opened[0].Close()

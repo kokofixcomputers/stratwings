@@ -153,7 +153,11 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 
 	// Ports that the Panel wants reachable from the internet, through a tunnel service.
 	if src, ok := pclient.(tunnelClient); ok {
-		tunnel.Default = tunnel.NewManager(tunnelSource{src}, tunnel.NewNgrok())
+		tunnel.Default = tunnel.NewManager(tunnelSource{src}, map[string]tunnel.Starter{
+			tunnel.NgrokProvider:  tunnel.NewNgrok(),
+			tunnel.PinggyProvider: tunnel.NewPinggy(filepath.Join(config.Get().System.RootDirectory, ".tunnels")),
+			tunnel.PlayitProvider: tunnel.NewPlayit(),
+		})
 		go tunnel.Default.Run(cmd.Context())
 	}
 
@@ -590,7 +594,7 @@ type tunnelSource struct{ client tunnelClient }
 
 func (s tunnelSource) Tunnels(ctx context.Context) (tunnel.Config, error) {
 	config, err := s.client.Tunnels(ctx)
-	out := tunnel.Config{Token: config.Token}
+	out := tunnel.Config{Provider: config.Provider, Token: config.Token}
 	for _, t := range config.Tunnels {
 		out.Tunnels = append(out.Tunnels, tunnel.Tunnel{ID: t.ID, IP: t.IP, Port: t.Port})
 	}
