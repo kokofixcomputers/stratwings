@@ -25,10 +25,12 @@ type Tunnel struct {
 
 // Config is what the Panel wants this node to have open: the token of the tunnel service, and the tunnels.
 type Config struct {
-	// The service the tunnels go through: ngrok, pinggy or playit. Empty is ngrok.
+	// The service the tunnels go through: ngrok, pinggy, playit or quickexpose. Empty is ngrok.
 	Provider string
 	Token    string
-	Tunnels  []Tunnel
+	// The address of the relay, for QuickExpose.
+	Backend string
+	Tunnels []Tunnel
 }
 
 // Source is the Panel, as far as tunnels go.
@@ -46,9 +48,21 @@ type Open interface {
 	Close() error
 }
 
+// Spec is what a tunnel is opened with.
+type Spec struct {
+	// The id the Panel gave the tunnel.
+	ID int
+	// The token of the service (not every service has one).
+	Token string
+	// The address on this machine the tunnel leads to.
+	Upstream string
+	// Where the service is, for the ones that are run by the admin (QuickExpose).
+	Backend string
+}
+
 // Starter opens a tunnel from the internet to an address on this machine.
 type Starter interface {
-	Start(ctx context.Context, token, upstream string) (Open, error)
+	Start(ctx context.Context, spec Spec) (Open, error)
 }
 
 // Providers are the tunnel services this node can use, by name.
@@ -56,6 +70,8 @@ const (
 	NgrokProvider  = "ngrok"
 	PinggyProvider = "pinggy"
 	PlayitProvider = "playit"
+	// QuickExpose is a relay the admin runs, its address is the backend.
+	QuickExposeProvider = "quickexpose"
 )
 
 type running struct {
@@ -78,6 +94,7 @@ type Manager struct {
 	config   Config
 	provider string
 	token    string
+	backend  string
 	tunnels  map[int]*running
 	// The tunnels that failed to open, which are tried again at the next sync, and the ones the Panel was told are waiting.
 	failed map[int]bool
@@ -134,10 +151,11 @@ func (m *Manager) apply(ctx context.Context) {
 	}
 
 	// A new token is a new account, and another service is another way out: everything is opened again.
-	if config.Token != m.token || provider != m.provider {
+	if config.Token != m.token || provider != m.provider || config.Backend != m.backend {
 		m.closeAll()
 		m.token = config.Token
 		m.provider = provider
+		m.backend = config.Backend
 	}
 
 	wanted := map[int]Tunnel{}
@@ -183,15 +201,20 @@ func (m *Manager) apply(ctx context.Context) {
 			m.report(ctx, id, "failed", "", "This node does not know the tunnel service "+provider+".")
 			continue
 		}
-		// Pinggy has a free plan that needs no token, the others do.
-		if config.Token == "" && provider != PinggyProvider {
+		// Pinggy has a free plan and QuickExpose has no accounts, the others need a token.
+		if config.Token == "" && provider != PinggyProvider && provider != QuickExposeProvider {
 			m.failed[id] = true
 			m.report(ctx, id, "failed", "", "No tunnel token is set in the Panel.")
 			continue
 		}
+		if provider == QuickExposeProvider && strings.TrimSpace(config.Backend) == "" {
+			m.failed[id] = true
+			m.report(ctx, id, "failed", "", "No backend URL is set in the Panel.")
+			continue
+		}
 
 		upstream := Upstream(t.IP, t.Port)
-		open, err := starter.Start(ctx, config.Token, upstream)
+		open, err := starter.Start(ctx, Spec{ID: id, Token: config.Token, Upstream: upstream, Backend: config.Backend})
 		if err != nil {
 			log.WithField("tunnel", id).WithField("error", err).Warn("could not open a tunnel")
 			m.failed[id] = true

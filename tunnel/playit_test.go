@@ -88,7 +88,7 @@ func TestPlayitMakesATunnelAndRunsTheDaemon(t *testing.T) {
 	api, runner := &fakePlayitAPI{}, &fakeRunner{}
 	p := newTestPlayit(t, api, runner)
 
-	open, err := p.Start(context.Background(), "good-secret", "127.0.0.1:25565")
+	open, err := p.Start(context.Background(), Spec{Token: "good-secret", Upstream: "127.0.0.1:25565"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestPlayitMakesATunnelAndRunsTheDaemon(t *testing.T) {
 	}
 
 	// A second tunnel uses the same daemon, which stops with the last one.
-	second, err := p.Start(context.Background(), "good-secret", "127.0.0.1:25566")
+	second, err := p.Start(context.Background(), Spec{Token: "good-secret", Upstream: "127.0.0.1:25566"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestPlayitWaitsForTheAddress(t *testing.T) {
 	api, runner := &fakePlayitAPI{pending: 2}, &fakeRunner{}
 	p := newTestPlayit(t, api, runner)
 
-	open, err := p.Start(context.Background(), "good-secret", "127.0.0.1:25565")
+	open, err := p.Start(context.Background(), Spec{Token: "good-secret", Upstream: "127.0.0.1:25565"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestPlayitSaysWhenTheSecretIsWrong(t *testing.T) {
 	api, runner := &fakePlayitAPI{}, &fakeRunner{}
 	p := newTestPlayit(t, api, runner)
 
-	_, err := p.Start(context.Background(), "wrong", "127.0.0.1:25565")
+	_, err := p.Start(context.Background(), Spec{Token: "wrong", Upstream: "127.0.0.1:25565"})
 	if err == nil || err.Error() != "playit.gg refused: auth invalid-agent-key (is the agent secret key right?)" {
 		t.Fatalf("got %v", err)
 	}
@@ -157,7 +157,7 @@ func TestPlayitSaysWhenTheDaemonIsNotInstalled(t *testing.T) {
 	api, runner := &fakePlayitAPI{}, &fakeRunner{fail: exec.ErrNotFound}
 	p := newTestPlayit(t, api, runner)
 
-	_, err := p.Start(context.Background(), "good-secret", "127.0.0.1:25565")
+	_, err := p.Start(context.Background(), Spec{Token: "good-secret", Upstream: "127.0.0.1:25565"})
 	if err == nil {
 		t.Fatalf("an error was expected")
 	}
@@ -172,7 +172,7 @@ func TestPlayitSaysWhenTheDaemonIsNotInstalled(t *testing.T) {
 func TestATunnelIsGoneWhenTheDaemonIs(t *testing.T) {
 	api, runner := &fakePlayitAPI{}, &fakeRunner{}
 	p := newTestPlayit(t, api, runner)
-	open, err := p.Start(context.Background(), "good-secret", "127.0.0.1:25565")
+	open, err := p.Start(context.Background(), Spec{Token: "good-secret", Upstream: "127.0.0.1:25565"})
 	if err != nil {
 		t.Fatal(err)
 	}

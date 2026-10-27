@@ -16,9 +16,11 @@ type Tunnel struct {
 
 // TunnelConfig is what the Panel wants this node to have open: the token of the tunnel service, and the tunnels.
 type TunnelConfig struct {
-	Provider string   `json:"provider"`
-	Token    string   `json:"token"`
-	Tunnels  []Tunnel `json:"tunnels"`
+	Provider string `json:"provider"`
+	// The address of the relay, for QuickExpose.
+	Backend string   `json:\"backend\"`
+	Token   string   `json:"token"`
+	Tunnels []Tunnel `json:"tunnels"`
 }
 
 // Tunnels asks the Panel which tunnels this node should have open.

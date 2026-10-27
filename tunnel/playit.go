@@ -193,8 +193,9 @@ func (p *Playit) release(token string, agent *playitAgent) {
 }
 
 // Start makes a tunnel on the account that leads to the upstream, and waits until playit.gg has given it an address.
-func (p *Playit) Start(ctx context.Context, token, upstream string) (Open, error) {
-	host, portText, err := net.SplitHostPort(upstream)
+func (p *Playit) Start(ctx context.Context, spec Spec) (Open, error) {
+	token := spec.Token
+	host, portText, err := net.SplitHostPort(spec.Upstream)
 	if err != nil {
 		return nil, err
 	}

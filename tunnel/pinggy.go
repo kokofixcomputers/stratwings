@@ -69,10 +69,10 @@ func (p *Pinggy) hostKey(_ string, _ net.Addr, key ssh.PublicKey) error {
 }
 
 // Start forwards a TCP address that Pinggy gives out to the upstream.
-func (p *Pinggy) Start(ctx context.Context, token, upstream string) (Open, error) {
+func (p *Pinggy) Start(ctx context.Context, spec Spec) (Open, error) {
 	user := "tcp"
-	if token != "" {
-		user = token + "+tcp"
+	if spec.Token != "" {
+		user = spec.Token + "+tcp"
 	}
 
 	client, err := ssh.Dial("tcp", p.addr, &ssh.ClientConfig{
@@ -149,7 +149,7 @@ func (p *Pinggy) Start(ctx context.Context, token, upstream string) (Open, error
 	go func() {
 		defer tunnel.once.Do(func() { close(tunnel.done) })
 		go keepAlive(client, tunnel.done)
-		go forward(listener, upstream)
+		go forward(listener, spec.Upstream)
 		_ = client.Wait()
 		_ = listener.Close()
 	}()

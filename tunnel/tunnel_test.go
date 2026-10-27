@@ -50,7 +50,8 @@ type fakeStarter struct {
 	opened  []*fakeOpen
 }
 
-func (s *fakeStarter) Start(_ context.Context, token, upstream string) (Open, error) {
+func (s *fakeStarter) Start(_ context.Context, spec Spec) (Open, error) {
+	token, upstream := spec.Token, spec.Upstream
 	if s.fail != nil {
 		return nil, s.fail
 	}

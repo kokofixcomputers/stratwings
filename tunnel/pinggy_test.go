@@ -106,7 +106,7 @@ func TestPinggyGivesTheAddressAndForwardsConnections(t *testing.T) {
 	fake := newFakePinggy(t, "Pinggy\r\nURLs:\r\n  tcp://abc-def.a.pinggy.link:34567\r\n")
 	p := &Pinggy{dir: t.TempDir(), addr: fake.listener.Addr().String()}
 
-	open, err := p.Start(context.Background(), "mytoken", upstream.Addr().String())
+	open, err := p.Start(context.Background(), Spec{Token: "mytoken", Upstream: upstream.Addr().String()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestPinggyWithoutATokenIsTheFreePlan(t *testing.T) {
 	fake := newFakePinggy(t, "tcp://x.a.pinggy.link:1\r\n")
 	p := &Pinggy{dir: t.TempDir(), addr: fake.listener.Addr().String()}
 
-	open, err := p.Start(context.Background(), "", "127.0.0.1:1")
+	open, err := p.Start(context.Background(), Spec{Token: "", Upstream: "127.0.0.1:1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestPinggyRefusesAnotherHostKey(t *testing.T) {
 	dir := t.TempDir()
 	first := newFakePinggy(t, "tcp://x.a.pinggy.link:1\r\n")
 	p := &Pinggy{dir: dir, addr: first.listener.Addr().String()}
-	open, err := p.Start(context.Background(), "", "127.0.0.1:1")
+	open, err := p.Start(context.Background(), Spec{Token: "", Upstream: "127.0.0.1:1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestPinggyRefusesAnotherHostKey(t *testing.T) {
 	// Another server answers on the address now.
 	second := newFakePinggy(t, "tcp://y.a.pinggy.link:2\r\n")
 	p.addr = second.listener.Addr().String()
-	_, err = p.Start(context.Background(), "", "127.0.0.1:1")
+	_, err = p.Start(context.Background(), Spec{Token: "", Upstream: "127.0.0.1:1"})
 	if err == nil || !strings.Contains(err.Error(), "host key") {
 		t.Fatalf("a different host key should be refused, got %v", err)
 	}

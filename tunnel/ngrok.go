@@ -46,13 +46,13 @@ func (n *Ngrok) agent(token string) (ngrok.Agent, error) {
 }
 
 // Start forwards a TCP address that ngrok gives out to the upstream.
-func (n *Ngrok) Start(ctx context.Context, token, upstream string) (Open, error) {
-	agent, err := n.agent(token)
+func (n *Ngrok) Start(ctx context.Context, spec Spec) (Open, error) {
+	agent, err := n.agent(spec.Token)
 	if err != nil {
 		return nil, err
 	}
 
-	endpoint, err := agent.Forward(ctx, ngrok.WithUpstream("tcp://"+upstream), ngrok.WithURL("tcp://"))
+	endpoint, err := agent.Forward(ctx, ngrok.WithUpstream("tcp://"+spec.Upstream), ngrok.WithURL("tcp://"))
 	if err != nil {
 		return nil, err
 	}
