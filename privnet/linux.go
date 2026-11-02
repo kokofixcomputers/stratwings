@@ -244,7 +244,7 @@ func writeSysctl(path, value string) error {
 	return os.WriteFile(path, []byte(value), 0o644)
 }
 
-func (l *Linux) EnsureHost(bridge string, port int) error {
+func (l *Linux) EnsureHost(bridge string, port int, tunnel bool) error {
 	// The node passes traffic between the bridge and the tunnel.
 	if err := writeSysctl("/proc/sys/net/ipv4/ip_forward", "1"); err != nil {
 		return err
@@ -256,6 +256,10 @@ func (l *Linux) EnsureHost(bridge string, port int) error {
 	}
 	// Traffic between containers of the same bridge goes through the rules too (Docker turns this on, the module may not be loaded yet).
 	_ = writeSysctl("/proc/sys/net/bridge/bridge-nf-call-iptables", "1")
+
+	if !tunnel {
+		return nil
+	}
 
 	// The tunnel port is let in. A firewall that is not iptables has to be told by whoever runs the node.
 	rule := []string{"INPUT", "-p", "udp", "--dport", fmt.Sprint(port), "-j", "ACCEPT"}

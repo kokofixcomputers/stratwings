@@ -35,7 +35,7 @@ a node its https certificate**, so a node needs no certbot, no files and no rest
   servers that joined are attached to with their address, `proxy_arp` on the bridge, `ip_forward`, UDP port 51820 opened in iptables, and the
   chain `STRAT-PRIVATE` in `DOCKER-USER` that lets a server be reached by the other servers of its owner and by nobody else. The panel says when
   something changed with `POST /api/private-network/sync`; the node also looks every minute, and attaches containers every few seconds (a container
-  is made again at every start). Needs the WireGuard module of the kernel (built in since Linux 5.6), root, and iptables. Code: `privnet/`.
+  is made again at every start). Needs root and iptables, and the WireGuard module of the kernel (built in since Linux 5.6) once there is a second node: one node needs no tunnel. Code: `privnet/`.
 
 Everything else is unchanged, including `--auto-tls` (Let's Encrypt by Wings itself).
 

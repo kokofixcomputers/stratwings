@@ -87,7 +87,8 @@ type Platform interface {
 	EnsureNetwork(spec NetSpec) (bridge string, err error)
 	RemoveNetwork() error
 	// EnsureHost sets what the host needs to pass traffic between the bridge and the tunnel.
-	EnsureHost(bridge string, port int) error
+	// EnsureHost also opens the tunnel port when there is a tunnel.
+	EnsureHost(bridge string, port int, tunnel bool) error
 	ApplyFirewall(rules []string) error
 	RemoveFirewall() error
 	// Attached lists the containers on the private network.
@@ -202,10 +203,16 @@ func (m *Manager) apply(config Config) Report {
 	}
 	m.spec, m.bridge = spec, bridge
 
-	if err := m.platform.EnsureWire(WireSpec{Port: config.Port, Peers: config.Peers}); err != nil {
-		return fail("could not set up the tunnel (does the kernel have WireGuard?)", err)
+	// The tunnel is only needed to reach another node. With one node (or no other that told its key yet) the servers reach each other on the
+	// bridge, and the kernel does not even have to have WireGuard.
+	if len(config.Peers) > 0 {
+		if err := m.platform.EnsureWire(WireSpec{Port: config.Port, Peers: config.Peers}); err != nil {
+			return fail("could not set up the tunnel (does the kernel have WireGuard?)", err)
+		}
+	} else {
+		_ = m.platform.RemoveWire()
 	}
-	if err := m.platform.EnsureHost(bridge, config.Port); err != nil {
+	if err := m.platform.EnsureHost(bridge, config.Port, len(config.Peers) > 0); err != nil {
 		return fail("could not set up the host", err)
 	}
 	if err := m.platform.ApplyFirewall(Rules(config)); err != nil {

@@ -51,7 +51,7 @@ func (p *fakePlatform) RemoveNetwork() error {
 	p.attached = map[string]string{}
 	return nil
 }
-func (p *fakePlatform) EnsureHost(bridge string, port int) error {
+func (p *fakePlatform) EnsureHost(bridge string, port int, tunnel bool) error {
 	p.host = append(p.host, bridge)
 	return p.fail["host"]
 }
@@ -286,5 +286,28 @@ func TestAReportIsNotRepeatedUntilSomethingChanges(t *testing.T) {
 	_ = m.Sync(context.Background())
 	if len(source.reports) != 1 {
 		t.Fatalf("the same report is not sent again: %d", len(source.reports))
+	}
+}
+
+func TestOneNodeNeedsNoTunnel(t *testing.T) {
+	config := baseConfig()
+	config.Peers = nil
+	source := &fakeSource{config: config}
+	platform := newFake()
+	platform.exists = map[string]bool{"u1": true, "u2": true}
+	// The kernel has no WireGuard: it does not matter without other nodes.
+	platform.fail["wire"] = errors.New("operation not supported")
+	m := NewManager(source, platform)
+
+	_ = m.Sync(context.Background())
+
+	if len(platform.wire) != 0 {
+		t.Fatalf("no tunnel without another node: %+v", platform.wire)
+	}
+	if report := source.reports[len(source.reports)-1]; report.State != "ready" {
+		t.Fatalf("one node works without WireGuard: %+v", report)
+	}
+	if platform.attached["u1"] != "10.99.3.2" || platform.attached["u2"] != "10.99.3.3" || len(platform.firewall) != 1 {
+		t.Fatalf("the servers are on the network with their rules: %v", platform.attached)
 	}
 }
