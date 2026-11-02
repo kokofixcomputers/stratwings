@@ -36,6 +36,7 @@ import (
 	"github.com/pterodactyl/wings/internal/jobs"
 	"github.com/pterodactyl/wings/internal/network"
 	"github.com/pterodactyl/wings/loggers/cli"
+	"github.com/pterodactyl/wings/privnet"
 	"github.com/pterodactyl/wings/remote"
 	"github.com/pterodactyl/wings/router"
 	"github.com/pterodactyl/wings/server"
@@ -149,6 +150,12 @@ func rootCmdRun(cmd *cobra.Command, _ []string) {
 	if err := database.Initialize(); err != nil {
 		log.WithField("error", err).Fatal("failed to initialize database")
 		return
+	}
+
+	// The private network between servers: this node makes the tunnel to the other nodes and puts the servers on it, when the Panel has it on.
+	if src, ok := pclient.(privateNetworkClient); ok {
+		privnet.Default = privnet.NewManager(privateNetworkSource{src}, privnet.NewLinux(filepath.Join(config.Get().System.RootDirectory, ".privnet")))
+		go privnet.Default.Run(cmd.Context())
 	}
 
 	manager, err := server.NewManager(cmd.Context(), pclient)
@@ -614,4 +621,30 @@ func (s tunnelSource) Tunnels(ctx context.Context) (tunnel.Config, error) {
 
 func (s tunnelSource) ReportTunnel(ctx context.Context, id int, state, address, message string) error {
 	return s.client.ReportTunnel(ctx, id, state, address, message)
+}
+
+// privateNetworkClient is the part of the client of the Panel that is about the private network.
+type privateNetworkClient interface {
+	PrivateNetwork(ctx context.Context) (remote.PrivateNetworkConfig, error)
+	ReportPrivateNetwork(ctx context.Context, publicKey, state, message string) error
+}
+
+// privateNetworkSource tells the private network manager what the Panel wants, in its own types.
+type privateNetworkSource struct{ client privateNetworkClient }
+
+func (s privateNetworkSource) PrivateNetwork(ctx context.Context) (privnet.Config, error) {
+	config, err := s.client.PrivateNetwork(ctx)
+	out := privnet.Config{Enabled: config.Enabled, Range: config.Range, Subnet: config.Subnet, Gateway: config.Gateway, Port: config.Port}
+	for _, p := range config.Peers {
+		out.Peers = append(out.Peers, privnet.Peer{Name: p.Name, Endpoint: p.Endpoint, PublicKey: p.PublicKey, Subnet: p.Subnet})
+	}
+	for _, m := range config.Servers {
+		out.Servers = append(out.Servers, privnet.Member{UUID: m.UUID, Address: m.Address, Group: m.Group})
+	}
+
+	return out, err
+}
+
+func (s privateNetworkSource) ReportPrivateNetwork(ctx context.Context, report privnet.Report) error {
+	return s.client.ReportPrivateNetwork(ctx, report.PublicKey, report.State, report.Message)
 }

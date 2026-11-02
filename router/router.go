@@ -111,6 +111,8 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 	protected.GET("/api/system/update", getSelfUpdate)
 	// The Panel says that somebody opened or closed a tunnel: this node looks at what is wanted again.
 	protected.POST("/api/tunnels/sync", postTunnelsSync)
+	// The Panel says that the private network changed (a server joined or left, the range changed): this node looks at what is wanted again.
+	protected.POST("/api/private-network/sync", postPrivateNetworkSync)
 	protected.POST("/api/system/update", postSelfUpdate)
 	protected.GET("/api/servers", getAllServers)
 	protected.POST("/api/servers", postCreateServer)

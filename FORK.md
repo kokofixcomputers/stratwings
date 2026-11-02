@@ -26,6 +26,17 @@ a node its https certificate**, so a node needs no certbot, no files and no rest
   something changed with `POST /api/tunnels/sync`; the node also looks every three minutes and when it starts, which opens a tunnel that
   failed. Code: `tunnel/`.
 
+- **Private network.** The Panel can give servers addresses on a private network that servers of the same owner reach each other on, on this node
+  and on other nodes, without the traffic going over the public internet (Admin > Settings > Private network, off by default). This node asks
+  the panel (`GET /api/remote/private-network`) for its slice of the range (`10.99.3.0/24`), the other nodes and the servers that joined, and
+  sets up by itself: a WireGuard interface `strat0` (kernel WireGuard through the wgctrl library, no tools needed) with a key it makes and keeps in
+  `<root_directory>/.privnet` and reports to the panel (`POST /api/remote/private-network`), routes for the slices of the other nodes, a Docker network
+  `stratosphere_private` (bridge `strat_priv0`, the whole range as its subnet and the slice as what it gives out, no NAT) that the containers of
+  servers that joined are attached to with their address, `proxy_arp` on the bridge, `ip_forward`, UDP port 51820 opened in iptables, and the
+  chain `STRAT-PRIVATE` in `DOCKER-USER` that lets a server be reached by the other servers of its owner and by nobody else. The panel says when
+  something changed with `POST /api/private-network/sync`; the node also looks every minute, and attaches containers every few seconds (a container
+  is made again at every start). Needs the WireGuard module of the kernel (built in since Linux 5.6), root, and iptables. Code: `privnet/`.
+
 Everything else is unchanged, including `--auto-tls` (Let's Encrypt by Wings itself).
 
 ## Setting a node up with it

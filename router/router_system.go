@@ -11,6 +11,7 @@ import (
 	"github.com/pterodactyl/wings/router/tokens"
 
 	"github.com/pterodactyl/wings/config"
+	"github.com/pterodactyl/wings/privnet"
 	"github.com/pterodactyl/wings/router/middleware"
 	"github.com/pterodactyl/wings/server"
 	"github.com/pterodactyl/wings/server/installer"
@@ -235,6 +236,23 @@ func postTunnelsSync(c *gin.Context) {
 		defer cancel()
 		if err := tunnel.Default.Sync(ctx); err != nil {
 			log.WithField("error", err).Warn("could not sync tunnels")
+		}
+	}()
+	c.Status(http.StatusAccepted)
+}
+
+// The Panel says that the private network changed. The node looks at what is wanted and sets it up, which is done after the answer is sent.
+func postPrivateNetworkSync(c *gin.Context) {
+	if privnet.Default == nil {
+		c.AbortWithStatusJSON(http.StatusNotImplemented, gin.H{"error": "This node does not have the private network."})
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := privnet.Default.Sync(ctx); err != nil {
+			log.WithField("error", err).Warn("could not sync the private network")
 		}
 	}()
 	c.Status(http.StatusAccepted)
