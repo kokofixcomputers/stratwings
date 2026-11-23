@@ -230,13 +230,22 @@ func postServerJobDecompress(c *gin.Context) {
 			if err := fs.SpaceAvailableForDecompression(ctx, root, file); err != nil {
 				return friendlyArchiveError(err)
 			}
+			var total int64
 			if st, err := fs.Stat(path.Join(root, file)); err == nil {
-				update(func(j *jobs.Job) { j.BytesTotal = st.Size() })
+				total = st.Size()
+				update(func(j *jobs.Job) { j.BytesTotal = total })
 			}
 			update(func(j *jobs.Job) { j.Status = jobs.Running })
 
 			var read atomic.Int64
-			stop := jobs.Poll(ctx, time.Second, read.Load, func(n int64) {
+			// A zip is read in pieces at any position, so some bytes are read more than once: never more than the whole.
+			stop := jobs.Poll(ctx, time.Second, func() int64 {
+				if n := read.Load(); total <= 0 || n < total {
+					return n
+				}
+
+				return total
+			}, func(n int64) {
 				update(func(j *jobs.Job) { j.Bytes = n })
 			})
 			err := fs.DecompressFileWith(ctx, root, file, func(n int64) { read.Add(n) })

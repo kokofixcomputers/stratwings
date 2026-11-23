@@ -146,3 +146,29 @@ func TestDecompressZipSymlinkEntry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "target.txt", target)
 }
+
+// The job that extracts an archive counts what it reads (DecompressFileWith). That must not take away what zip, 7z and rar need: an
+// archive that can be seeked. Only tar-like streams worked when the counter hid it.
+func TestDecompressWithProgressReadsZip(t *testing.T) {
+	fs, rfs := NewFs()
+	t.Cleanup(func() { _ = os.RemoveAll(rfs.root) })
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, body := range map[string]string{"a.txt": "hello", "dir/b.txt": "world"} {
+		w, err := zw.Create(name)
+		require.NoError(t, err)
+		_, err = w.Write([]byte(body))
+		require.NoError(t, err)
+	}
+	require.NoError(t, zw.Close())
+	require.NoError(t, rfs.CreateServerFile("bundle.zip", buf.Bytes()))
+
+	var read int64
+	require.NoError(t, fs.DecompressFileWith(context.Background(), "/", "bundle.zip", func(n int64) { read += n }))
+
+	got, err := os.ReadFile(filepath.Join(rfs.root, "server", "dir", "b.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "world", string(got))
+	assert.Greater(t, read, int64(0))
+}

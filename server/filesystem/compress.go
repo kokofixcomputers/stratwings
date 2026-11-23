@@ -212,19 +212,33 @@ func (fs *Filesystem) DecompressFile(ctx context.Context, dir string, file strin
 	return fs.DecompressFileWith(ctx, dir, file, nil)
 }
 
-// countReader tells how much has been read from the archive.
-type countReader struct {
-	io.Reader
+// countFile tells how much has been read from the archive. It stays a file that can be seeked and read at any position: zip, 7z and
+// rar archives cannot be read as a stream (the index is at the end), so a plain counting reader would make every format but tar fail.
+type countFile struct {
+	f      ufs.File
 	onRead func(int64)
 }
 
-func (c *countReader) Read(p []byte) (int, error) {
-	n, err := c.Reader.Read(p)
+func (c *countFile) Read(p []byte) (int, error) {
+	n, err := c.f.Read(p)
 	if n > 0 {
 		c.onRead(int64(n))
 	}
 
 	return n, err
+}
+
+func (c *countFile) ReadAt(p []byte, off int64) (int, error) {
+	n, err := c.f.ReadAt(p, off)
+	if n > 0 {
+		c.onRead(int64(n))
+	}
+
+	return n, err
+}
+
+func (c *countFile) Seek(offset int64, whence int) (int64, error) {
+	return c.f.Seek(offset, whence)
 }
 
 // DecompressFileWith is DecompressFile that calls onRead with the number of bytes it reads of the archive (when given).
@@ -237,7 +251,7 @@ func (fs *Filesystem) DecompressFileWith(ctx context.Context, dir string, file s
 
 	var source io.Reader = f
 	if onRead != nil {
-		source = &countReader{Reader: f, onRead: onRead}
+		source = &countFile{f: f, onRead: onRead}
 	}
 
 	// Identify the type of archive we are dealing with.
